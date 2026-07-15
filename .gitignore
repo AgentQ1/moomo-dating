@@ -1,0 +1,17 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+# Firebase / secrets — never commit these
+GoogleService-Info.plist
+.env
+.firebase/
+functions/node_modules/
+node_modules/
+
+# Visual validation output
+tools/visual/actual/
+tools/visual/diff/
