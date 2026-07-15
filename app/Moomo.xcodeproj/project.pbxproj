@@ -8,6 +8,8 @@
 
 /* Begin PBXFileReference section */
 		1A000000000000000000000B /* Moomo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Moomo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A0000000000000000000022 /* MoomoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MoomoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A0000000000000000000032 /* MoomoUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MoomoUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,10 +18,34 @@
 			path = Moomo;
 			sourceTree = "<group>";
 		};
+		1A0000000000000000000021 /* MoomoTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = MoomoTests;
+			sourceTree = "<group>";
+		};
+		1A0000000000000000000031 /* MoomoUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = MoomoUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		1A000000000000000000000E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A0000000000000000000024 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A0000000000000000000034 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -33,6 +59,8 @@
 			isa = PBXGroup;
 			children = (
 				1A000000000000000000000C /* Moomo */,
+				1A0000000000000000000021 /* MoomoTests */,
+				1A0000000000000000000031 /* MoomoUITests */,
 				1A00000000000000000000A0 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,11 +69,43 @@
 			isa = PBXGroup;
 			children = (
 				1A000000000000000000000B /* Moomo.app */,
+				1A0000000000000000000022 /* MoomoTests.xctest */,
+				1A0000000000000000000032 /* MoomoUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
+
+/* Begin PBXContainerItemProxy section */
+		1A000000000000000000002A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1A0000000000000000000002;
+			remoteInfo = Moomo;
+		};
+		1A000000000000000000003A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1A0000000000000000000002;
+			remoteInfo = Moomo;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+		1A0000000000000000000029 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1A0000000000000000000002 /* Moomo */;
+			targetProxy = 1A000000000000000000002A /* PBXContainerItemProxy */;
+		};
+		1A0000000000000000000039 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1A0000000000000000000002 /* Moomo */;
+			targetProxy = 1A000000000000000000003A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXNativeTarget section */
 		1A0000000000000000000002 /* Moomo */ = {
@@ -68,6 +128,48 @@
 			productReference = 1A000000000000000000000B /* Moomo.app */;
 			productType = "com.apple.product-type.application";
 		};
+		1A0000000000000000000020 /* MoomoTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1A0000000000000000000026 /* Build configuration list for PBXNativeTarget "MoomoTests" */;
+			buildPhases = (
+				1A0000000000000000000023 /* Sources */,
+				1A0000000000000000000024 /* Frameworks */,
+				1A0000000000000000000025 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1A0000000000000000000029 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				1A0000000000000000000021 /* MoomoTests */,
+			);
+			name = MoomoTests;
+			productName = MoomoTests;
+			productReference = 1A0000000000000000000022 /* MoomoTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		1A0000000000000000000030 /* MoomoUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1A0000000000000000000036 /* Build configuration list for PBXNativeTarget "MoomoUITests" */;
+			buildPhases = (
+				1A0000000000000000000033 /* Sources */,
+				1A0000000000000000000034 /* Frameworks */,
+				1A0000000000000000000035 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1A0000000000000000000039 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				1A0000000000000000000031 /* MoomoUITests */,
+			);
+			name = MoomoUITests;
+			productName = MoomoUITests;
+			productReference = 1A0000000000000000000032 /* MoomoUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -80,6 +182,14 @@
 				TargetAttributes = {
 					1A0000000000000000000002 = {
 						CreatedOnToolsVersion = 26.5;
+					};
+					1A0000000000000000000020 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = 1A0000000000000000000002;
+					};
+					1A0000000000000000000030 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = 1A0000000000000000000002;
 					};
 				};
 			};
@@ -98,6 +208,8 @@
 			projectRoot = "";
 			targets = (
 				1A0000000000000000000002 /* Moomo */,
+				1A0000000000000000000020 /* MoomoTests */,
+				1A0000000000000000000030 /* MoomoUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -110,10 +222,38 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		1A0000000000000000000025 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A0000000000000000000035 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		1A000000000000000000000D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A0000000000000000000023 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A0000000000000000000033 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -258,6 +398,76 @@
 			};
 			name = Release;
 		};
+		1A0000000000000000000027 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moomo.dating.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Moomo.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Moomo";
+			};
+			name = Debug;
+		};
+		1A0000000000000000000028 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moomo.dating.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Moomo.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Moomo";
+			};
+			name = Release;
+		};
+		1A0000000000000000000037 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moomo.dating.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Moomo;
+			};
+			name = Debug;
+		};
+		1A0000000000000000000038 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moomo.dating.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Moomo;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -275,6 +485,24 @@
 			buildConfigurations = (
 				1A0000000000000000000007 /* Debug */,
 				1A0000000000000000000008 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1A0000000000000000000026 /* Build configuration list for PBXNativeTarget "MoomoTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A0000000000000000000027 /* Debug */,
+				1A0000000000000000000028 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1A0000000000000000000036 /* Build configuration list for PBXNativeTarget "MoomoUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A0000000000000000000037 /* Debug */,
+				1A0000000000000000000038 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

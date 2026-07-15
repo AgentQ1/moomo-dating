@@ -1,20 +1,18 @@
 import SwiftUI
 
-/// Welcome / authentication — the app's first screen.
+/// Welcome / authentication — the app's first screen. Matches reference 1.
 ///
-/// Matches reference 1. Layout notes taken from the reference:
-/// • Logo is optically centred in the upper two-thirds, not the whole screen.
+/// Layout notes from the reference:
+/// • The logo is optically centred in the upper two-thirds, not the screen.
 /// • Sparkles are asymmetric: a blue one above the arc with a small gold one
-///   tucked beneath it, and a lone gold one off the arc's right shoulder.
-/// • The three auth rows are evenly spaced with a 14pt gap.
-/// • Page dots sit below the last button, the active one a blue sparkle.
+///   beneath it, and a lone gold one in the arc's right-hand opening.
+/// • Three auth rows, 14pt apart.
+/// • Page dots below, the active one a blue sparkle.
 struct WelcomeView: View {
+    @EnvironmentObject private var session: SessionStore
+
     @State private var hasConsented = false
     @State private var legalDocument: LegalDocument?
-    /// Incremented to bounce the consent row when sign-in is attempted without it.
-    @State private var consentNudge: CGFloat = 0
-    /// Set once consent is given and a provider is chosen; consumed in Phase 3.
-    @State private var pendingProvider: AuthProvider?
 
     var body: some View {
         ZStack {
@@ -42,7 +40,6 @@ struct WelcomeView: View {
                     onOpenPrivacy: { legalDocument = .privacy },
                     onOpenTerms: { legalDocument = .terms }
                 )
-                .modifier(NudgeEffect(animatableData: consentNudge))
                 .padding(.horizontal, Space.gutter)
                 .padding(.top, 28)
 
@@ -62,7 +59,7 @@ struct WelcomeView: View {
 
     private var logoBlock: some View {
         ZStack {
-            MoomoLogo()
+            LogoMark()
 
             // Blue sparkle above the arc, with its gold companion beneath.
             VStack(spacing: 2) {
@@ -71,73 +68,51 @@ struct WelcomeView: View {
             }
             .offset(y: -Size.logoDiameter / 2 - 26)
 
-            // Lone gold sparkle off the arc's right shoulder.
+            // Lone gold sparkle in the arc's opening.
             SparkleMark(size: 18, color: Palette.gold)
                 .offset(x: Size.logoDiameter / 2 + 12, y: 22)
         }
+        .accessibilityHidden(true)
     }
 
     private var authButtons: some View {
         VStack(spacing: Space.cardGap) {
-            AuthButton(title: "Continue with Google", isGated: !hasConsented) {
+            AuthButton(
+                title: "Continue with Google",
+                isEnabled: hasConsented,
+                isLoading: session.signingInWith == .google
+            ) {
                 GoogleGlyph()
             } action: {
-                signIn(with: .google)
+                session.signIn(with: .google, hasConsented: hasConsented)
             }
 
-            AuthButton(title: "Continue with Apple", isGated: !hasConsented) {
+            AuthButton(
+                title: "Continue with Apple",
+                isEnabled: hasConsented,
+                isLoading: session.signingInWith == .apple
+            ) {
                 Image(systemName: "apple.logo")
                     .font(.system(size: 22))
                     .foregroundStyle(.black)
             } action: {
-                signIn(with: .apple)
+                session.signIn(with: .apple, hasConsented: hasConsented)
             }
 
-            AuthButton(title: "Continue as Guest", isGated: !hasConsented) {
+            AuthButton(
+                title: "Continue as Guest",
+                isEnabled: hasConsented,
+                isLoading: session.signingInWith == .guest
+            ) {
                 Image(systemName: "person.fill")
                     .font(.system(size: 20, weight: .medium))
                     .foregroundStyle(Palette.blue.opacity(0.75))
             } action: {
-                signIn(with: .guest)
+                session.signIn(with: .guest, hasConsented: hasConsented)
             }
         }
         .padding(.horizontal, Space.gutter)
-    }
-
-    /// The consent gate. Sign-in is refused outright without consent — the
-    /// checkbox bounces and announces itself rather than the tap silently
-    /// doing nothing.
-    private func signIn(with provider: AuthProvider) {
-        guard hasConsented else {
-            withAnimation(Motion.tap) { consentNudge += 1 }
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
-            UIAccessibility.post(
-                notification: .announcement,
-                argument: "Please agree to the Privacy Policy and Terms of Service first"
-            )
-            return
-        }
-        // AuthService is wired in Phase 3; consent is recorded alongside the
-        // account so we can prove when and to which document version it was given.
-        pendingProvider = provider
-    }
-}
-
-/// The three ways into the app.
-enum AuthProvider {
-    case google
-    case apple
-    case guest
-}
-
-/// Nudges its content side to side. Used to draw the eye back to the consent
-/// checkbox when someone taps sign-in without ticking it.
-struct NudgeEffect: GeometryEffect {
-    var animatableData: CGFloat
-
-    func effectValue(size: CGSize) -> ProjectionTransform {
-        let travel = 7 * sin(animatableData * .pi * 3)
-        return ProjectionTransform(CGAffineTransform(translationX: travel, y: 0))
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -165,4 +140,5 @@ struct PageDots: View {
 
 #Preview {
     WelcomeView()
+        .environmentObject(SessionStore(auth: MockAuthenticationService()))
 }

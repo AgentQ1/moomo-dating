@@ -1,29 +1,24 @@
 import SwiftUI
 
 /// A full-width sign-in row: circular icon well on the left, centred blue
-/// label, chevron-style arrow on the right.
+/// label, trailing arrow. Shows a spinner in place of the arrow while its
+/// provider is authenticating.
 ///
-/// Consent gating, and why these don't dim:
-///
-/// The reference shows the checkbox *unchecked* and these rows at full
-/// strength, while the spec requires sign-in to be disabled until consent is
-/// given. Dimming them would contradict the reference; letting them sign you
-/// in would contradict the spec. So the row stays visually identical to the
-/// reference and remains tappable, but a gated tap refuses the sign-in and
-/// bounces the consent checkbox instead — consent is still strictly enforced,
-/// and the user is told why rather than being left with a dead control.
-///
-/// To switch to a literal dimmed-disabled treatment, set `isGated` to drive
-/// `.opacity` here; nothing else needs to change.
+/// Consent gating: these are genuinely disabled until consent is given —
+/// dimmed, non-tappable, and marked disabled to VoiceOver. The reference shows
+/// the rows at full strength with the box unchecked, so the dimmed state is a
+/// deliberate, spec-mandated departure from the reference on that one point.
 struct AuthButton<Icon: View>: View {
     var title: String
-    /// True when consent has not yet been given. The row still renders and
-    /// still accepts taps; `action` is expected to refuse.
-    var isGated: Bool
+    var isEnabled: Bool
+    /// Shows a spinner and blocks input while this provider is signing in.
+    var isLoading: Bool = false
     @ViewBuilder var icon: () -> Icon
     var action: () -> Void
 
     @State private var isPressed = false
+
+    private var isInteractive: Bool { isEnabled && !isLoading }
 
     var body: some View {
         Button(action: action) {
@@ -44,10 +39,19 @@ struct AuthButton<Icon: View>: View {
 
                 Spacer(minLength: 0)
 
-                Image(systemName: "arrow.right")
-                    .font(.system(size: Size.iconMedium, weight: .medium))
-                    .foregroundStyle(Palette.blue)
-                    .padding(.trailing, Space.lg)
+                Group {
+                    if isLoading {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(Palette.blue)
+                    } else {
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: Size.iconMedium, weight: .medium))
+                            .foregroundStyle(Palette.blue)
+                    }
+                }
+                .frame(width: Size.iconMedium)
+                .padding(.trailing, Space.lg)
             }
             .frame(height: Size.authButtonHeight)
             .frame(maxWidth: .infinity)
@@ -57,47 +61,50 @@ struct AuthButton<Icon: View>: View {
             )
             .shadow(Shadows.card)
             .scaleEffect(isPressed ? Motion.pressedScale : 1)
+            .opacity(isEnabled ? 1 : 0.4)
+            .saturation(isEnabled ? 1 : 0)
         }
         .buttonStyle(.plain)
+        .disabled(!isInteractive)
         .animation(Motion.tap, value: isPressed)
+        .animation(Motion.transition, value: isEnabled)
+        .animation(Motion.transition, value: isLoading)
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
+                .onChanged { _ in if isInteractive { isPressed = true } }
                 .onEnded { _ in isPressed = false }
         )
         .accessibilityLabel(title)
         .accessibilityHint(
-            isGated
-                ? "Agree to the Privacy Policy and Terms of Service to continue"
-                : ""
+            isEnabled ? "" : "Agree to the Privacy Policy and Terms of Service to enable"
         )
+        .accessibilityValue(isLoading ? "Signing in" : "")
     }
 }
 
-/// Google's mark. Drawn rather than bundled — the real asset ships with the
-/// GoogleSignIn SDK and should replace this once that package is added, since
-/// Google's brand guidelines require their exact logo.
+/// Google's mark.
+///
+/// Placeholder geometry. Google's brand guidelines require their exact asset,
+/// which ships inside the GoogleSignIn SDK — once that package is added, this
+/// becomes the bundled logo. Shipping this drawn approximation would breach
+/// those guidelines.
 struct GoogleGlyph: View {
     var size: CGFloat = 22
 
     var body: some View {
-        // Placeholder geometry that reads correctly at 22pt: the four-colour G.
-        // Replaced by `Image("google_logo")` from GoogleSignIn in Phase 3.
-        ZStack {
-            Text("G")
-                .font(.system(size: size, weight: .medium))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [
-                            Color(hex: 0x4285F4), Color(hex: 0x34A853),
-                            Color(hex: 0xFBBC05), Color(hex: 0xEA4335)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
+        Text("G")
+            .font(.system(size: size, weight: .medium))
+            .foregroundStyle(
+                LinearGradient(
+                    colors: [
+                        Color(hex: 0x4285F4), Color(hex: 0x34A853),
+                        Color(hex: 0xFBBC05), Color(hex: 0xEA4335)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
                 )
-        }
-        .frame(width: size, height: size)
+            )
+            .frame(width: size, height: size)
     }
 }
 
@@ -105,17 +112,17 @@ struct GoogleGlyph: View {
     ZStack {
         Palette.cream.ignoresSafeArea()
         VStack(spacing: Space.cardGap) {
-            AuthButton(title: "Continue with Google", isGated: false) {
+            AuthButton(title: "Continue with Google", isEnabled: true) {
                 GoogleGlyph()
             } action: {}
 
-            AuthButton(title: "Continue with Apple", isGated: false) {
+            AuthButton(title: "Continue with Apple", isEnabled: true, isLoading: true) {
                 Image(systemName: "apple.logo")
                     .font(.system(size: 22))
                     .foregroundStyle(.black)
             } action: {}
 
-            AuthButton(title: "Continue as Guest", isGated: true) {
+            AuthButton(title: "Continue as Guest", isEnabled: false) {
                 Image(systemName: "person.fill")
                     .font(.system(size: 20))
                     .foregroundStyle(Palette.blue)
