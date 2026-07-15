@@ -22,6 +22,12 @@ struct LiveCredentialProvider: CredentialProviding {
 
         case .google:
             #if canImport(GoogleSignIn)
+            // No iOS OAuth client means no CLIENT_ID in the plist, so the sheet
+            // would open misconfigured and fail obscurely. Fail early with
+            // something a developer can act on instead.
+            guard FirebaseBootstrap.isGoogleSignInConfigured else {
+                throw AuthError.providerFailed("Google is not configured")
+            }
             return try await GoogleSignInCoordinator().signIn()
             #else
             // No SDK linked. In mock mode this stands in for the provider round

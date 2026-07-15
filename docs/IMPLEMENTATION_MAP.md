@@ -117,3 +117,40 @@ screenshot, compare, correct, repeat.
    for a large share of real users without TURN relay.
 5. **Legal copy** in `LegalDocumentView` is placeholder and must be replaced by
    counsel-reviewed text before any submission.
+
+---
+
+## Firebase integration (2026-07-15, later)
+
+Linked: `firebase-ios-sdk` (FirebaseAuth, FirebaseFirestore, FirebaseStorage)
+and `GoogleSignIn-iOS`, via SPM.
+
+**Deliberately not linked:**
+- `FirebaseMessaging` — no push in the current spine. Linking it now would
+  require notification entitlements for a feature that doesn't exist.
+- `FirebaseAppCheck` — cannot be configured safely for local development
+  without a per-machine debug provider token. Enabling it now would break the
+  simulator for anyone who hasn't registered their debug token. It goes in
+  alongside the first Cloud Function, which is when it starts protecting
+  anything.
+
+**Collections introduced:**
+
+    users/{uid}                      private account data — owner-only
+    users/{uid}/private/onboarding   resumable draft — owner-only
+    publicProfiles/{uid}             public projection — owner-only for now
+
+`publicProfiles` is intentionally *not* readable by other signed-in users yet.
+Discover runs on mock data, so nothing needs it, and opening it before blocks
+and rate limiting exist would expose every profile to any account.
+
+**Blockers found:**
+
+1. **Google sign-in cannot work** — no iOS OAuth client exists, so the plist
+   carries no `CLIENT_ID`/`REVERSED_CLIENT_ID`. Registering the app via the CLI
+   does not mint one. Console action required.
+2. **Anonymous was disabled** despite being reported as enabled. Caught by
+   probing the live API rather than trusting the description; the user enabled
+   it, and it is now verified working.
+3. **The Firebase CLI was pointed at `fitcheck-d3091`** — an unrelated project —
+   from inside this repo. A deploy would have hit the wrong project. Now pinned.

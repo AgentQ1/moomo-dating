@@ -5,6 +5,9 @@ struct MoomoApp: App {
     @StateObject private var session: SessionStore
 
     init() {
+        // Must run before anything touches Auth or Firestore.
+        FirebaseBootstrap.configureIfNeeded()
+
         // UI tests need a cold, signed-out app. Without this each test would
         // inherit the previous one's account and drafts.
         if ProcessInfo.processInfo.arguments.contains("-ui-testing-reset") {
@@ -21,6 +24,11 @@ struct MoomoApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(session)
+                .onOpenURL { url in
+                    // Google's OAuth callback. Without this the sheet returns
+                    // to a blank screen rather than the app.
+                    _ = FirebaseBootstrap.handle(url: url)
+                }
         }
     }
 
@@ -30,11 +38,22 @@ struct MoomoApp: App {
             #if canImport(FirebaseAuth)
             return FirebaseAuthenticationService()
             #else
-            // Unreachable: `.firebase` is only resolved when the SDK imports.
+            // A real config with no SDK linked is a build misconfiguration.
+            // Falling back to the mock here would silently ship an app that
+            // authenticates nobody while looking like it works.
+            fatalError(
+                "GoogleService-Info.plist is present but the Firebase SDK is not linked."
+            )
+            #endif
+
+        case .localMock(let reason):
+            #if !DEBUG
+            // Never in production. A release build that quietly used the mock
+            // would sign users into an in-memory account and lose everything.
+            fatalError("Release builds require Firebase. Mock reason: \(reason).")
+            #else
             return MockAuthenticationService()
             #endif
-        case .localMock:
-            return MockAuthenticationService()
         }
     }
 }

@@ -1,0 +1,112 @@
+rules_version = '2';
+
+// Moomo — initial rules.
+//
+// Deny by default: the final `match /{document=**}` denies everything that
+// isn't explicitly allowed above, and nothing here grants a blanket read.
+//
+// Scope: only what the current app spine needs — user bootstrap, onboarding
+// resume/completion, and profile read/write. Matchmaking, calls, decisions,
+// matches, chat, blocks, and reports are NOT covered yet and are therefore
+// denied. That is intentional: an unwritten rule must fail closed.
+//
+// NOT DEPLOYED. Verify the active project is moomo-c7a37 before any deploy —
+// moomoios-2026 is the Moomo AI app and must never receive these.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Fields the client must never set: they are server-owned or would let a
+    // user grant themselves standing they haven't earned.
+    function noPrivilegedFields(data) {
+      return !data.keys().hasAny([
+        'isVerified',      // set by the verification review flow
+        'isPremium',       // set by validated StoreKit entitlement
+        'moderationState', // set by moderation tooling
+        'level'            // server-computed
+      ]);
+    }
+
+    // Timestamps must be the server's, not whatever the client claims.
+    function hasServerCreatedAt() {
+      return request.resource.data.createdAt == request.time;
+    }
+    function hasServerUpdatedAt() {
+      return request.resource.data.updatedAt == request.time;
+    }
+
+    // ---------------------------------------------------------------
+    // users/{uid} — private account data. Owner-only, never public.
+    // ---------------------------------------------------------------
+    match /users/{uid} {
+      allow get, list: if isSelf(uid);
+
+      allow create: if isSelf(uid)
+                    && hasServerCreatedAt()
+                    && hasServerUpdatedAt()
+                    && noPrivilegedFields(request.resource.data)
+                    // uid is the document id; it may not disagree with it.
+                    && request.resource.data.uid == uid;
+
+      allow update: if isSelf(uid)
+                    && hasServerUpdatedAt()
+                    && noPrivilegedFields(request.resource.data)
+                    // Immutable once written.
+                    && request.resource.data.uid == resource.data.uid
+                    && request.resource.data.createdAt == resource.data.createdAt;
+
+      // Deletion goes through the account-deletion job, which must also clean
+      // up photos, messages, and call history. A bare client delete would
+      // orphan all of it.
+      allow delete: if false;
+
+      // -------------------------------------------------------------
+      // users/{uid}/private/onboarding — the resumable draft.
+      // -------------------------------------------------------------
+      match /private/{document} {
+        allow read, write: if isSelf(uid);
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // publicProfiles/{uid} — the projection other users may see.
+    //
+    // Deliberately NOT readable by all signed-in users yet. Discover runs on
+    // local mock data today, so nothing needs this; opening it now would
+    // expose every profile to any account with no blocking, no reciprocity,
+    // and no rate limiting in place. It opens when Discover is served from
+    // Firestore and blocks exist to gate it.
+    // ---------------------------------------------------------------
+    match /publicProfiles/{uid} {
+      allow get, list: if isSelf(uid);
+
+      allow create, update: if isSelf(uid)
+                            && hasServerUpdatedAt()
+                            && noPrivilegedFields(request.resource.data)
+                            // A public profile must never carry private data.
+                            // Date of birth and precise location are the two
+                            // that would do real harm if they leaked.
+                            && !request.resource.data.keys().hasAny([
+                                 'dateOfBirth', 'email', 'phoneNumber',
+                                 'latitude', 'longitude', 'consent'
+                               ]);
+
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------------
+    // Everything else: denied.
+    // ---------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
