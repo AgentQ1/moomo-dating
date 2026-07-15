@@ -73,14 +73,14 @@ source vector (Illustrator/SVG/PDF) exported and dropped into the asset
 catalog, at which point `MFigures` collapses to an `Image`.
 
 **Reference/spec conflict, and how it was resolved.** The reference shows the
-consent checkbox *unchecked* with the three sign-in buttons at full strength.
-The spec requires sign-in "disabled until consent is checked". Dimming
-contradicts the reference; signing in contradicts the spec. Resolution: the
-rows stay visually identical to the reference and remain tappable, but a gated
-tap refuses sign-in, bounces the checkbox, fires a warning haptic, and posts a
-VoiceOver announcement. Consent is strictly enforced and never inferred.
-Flip to literal dimming by driving `.opacity` from `isGated` in
-`AuthButton.swift`.
+consent checkbox *unchecked* with the three sign-in buttons at full strength,
+while the spec requires sign-in "disabled until consent is checked".
+
+Resolved by explicit instruction: **the buttons genuinely dim and disable.**
+This is a deliberate, known departure from the reference on that one point —
+the reference's unchecked state is not reproduced. Sign-in is additionally
+refused inside `SessionStore`, so a screen that forgets to disable its buttons
+still cannot create an account. Consent is never inferred.
 
 **Backend behaviour required.** Record consent (timestamp + document version)
 against the account at creation; Google/Apple/anonymous sign-in via Firebase

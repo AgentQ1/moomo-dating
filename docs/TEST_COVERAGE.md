@@ -41,6 +41,34 @@ These are **not** written as passing tests. Do not treat them as covered.
 | **Session restoration with real Firebase** | The auth-state listener path is not covered by tests | Manual: sign in, force-quit, relaunch |
 | **Sign-out against real Firebase** | Same | Manual |
 
+## ⚠️ Current regression — 5 UI tests fail
+
+Before Firebase was linked: 9/9 UI tests passed.
+After: **4/9 pass, 5 fail.** Not flakiness — a real, diagnosed break.
+
+**Root cause: the Firestore database does not exist in `moomo-c7a37`.**
+Probed directly against the live API:
+
+    PERMISSION_DENIED — Cloud Firestore API has not been used in project
+    moomo-c7a37 before or it is disabled
+
+The chain: guest sign-in succeeds (anonymous auth works) → `bootstrap()` tries
+to write `users/{uid}` → Firestore rejects it → bootstrap throws → the user is
+never published → routing stays on Welcome → every UI test that expects to
+reach onboarding fails.
+
+The app is behaving correctly. It refuses to present a signed-in user whose
+profile could not be loaded, because publishing a hollow user would bounce a
+fully-onboarded person back through onboarding. The backend is simply not there
+yet.
+
+**Fix (console, one time):** Firebase console → Build → Firestore Database →
+Create database → production mode. Then deploy the rules in
+`backend/firestore.rules`, which are written but **not deployed**.
+
+Until then the real backend cannot complete a sign-in, and the UI suite cannot
+pass against it.
+
 ## The honest summary
 
 Everything above the Firebase boundary is well covered, because it was built
