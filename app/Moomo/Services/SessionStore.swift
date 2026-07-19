@@ -7,6 +7,10 @@ import SwiftUI
 /// keeps its own copy of the user or profile — they mutate through
 /// `updateProfile`, and the change flows back out via `@Published`. That rule
 /// is what stops the two-conflicting-profiles class of bug.
+///
+/// Sign-in itself lives in `PhoneAuthModel`: it is multi-step screen state
+/// (number → SMS → code) that dies with the welcome screen. Only the outcome
+/// reaches this store, through the auth service's `userStream`.
 @MainActor
 final class SessionStore: ObservableObject {
 
@@ -22,29 +26,18 @@ final class SessionStore: ObservableObject {
 
     @Published private(set) var route: Route = .launching
     @Published private(set) var user: User?
-    /// The provider currently authenticating, for per-button spinners.
-    @Published private(set) var signingInWith: AuthProvider?
-    /// The last provider tried, so a retryable failure knows what to retry.
-    @Published private(set) var lastAttemptedProvider: AuthProvider?
     @Published var error: AuthError?
 
     let auth: AuthenticationService
-    private let credentials: CredentialProviding
     private var observationTask: Task<Void, Never>?
-    private var signInTask: Task<Void, Never>?
 
-    init(
-        auth: AuthenticationService,
-        credentials: CredentialProviding = LiveCredentialProvider()
-    ) {
+    init(auth: AuthenticationService) {
         self.auth = auth
-        self.credentials = credentials
         observe()
     }
 
     deinit {
         observationTask?.cancel()
-        signInTask?.cancel()
     }
 
     private func observe() {
@@ -63,6 +56,22 @@ final class SessionStore: ObservableObject {
     /// state is actually valid — consent present and current, onboarding
     /// finished, required fields intact. Anything less and they resume
     /// onboarding rather than landing in a half-built app.
+    ///
+    /// Missing or stale consent is the exception: it routes to **welcome**, not
+    /// onboarding. Onboarding has no consent step, so sending a consent-less
+    /// user there is a dead end — they can fill in every field, tap "Start
+    /// meeting people", write it all to Firestore, and still fail
+    /// `hasValidProfileState` on the consent check. Routing then re-derives
+    /// `.onboarding`, the screen never changes, and nothing explains why.
+    ///
+    /// That is reachable whenever an account outlives its first write: the
+    /// auth-state listener bootstraps with `consent: nil` (it has no consent to
+    /// record and must not invent one), so a document created on that path has
+    /// no consent fields and the account is soft-locked forever.
+    ///
+    /// Welcome is where consent is given, and signing in from there records it
+    /// against the same uid without touching the profile — so this recovers the
+    /// account instead of stranding it.
     private func apply(_ user: User?) {
         self.user = user
 
@@ -70,94 +79,73 @@ final class SessionStore: ObservableObject {
             route = .welcome
             return
         }
-        route = user.hasValidProfileState ? .main : .onboarding
-    }
-
-    // MARK: - Sign in
-
-    /// Consent is enforced here, not only in the UI. A screen that forgets to
-    /// disable its buttons still cannot create an account without it.
-    func signIn(with provider: AuthProvider, hasConsented: Bool) {
-        guard hasConsented else {
-            error = .consentRequired
+        guard user.hasRecordedCurrentConsent else {
+            route = .welcome
             return
         }
-        guard signingInWith == nil else { return }
-
-        signingInWith = provider
-        lastAttemptedProvider = provider
-        error = nil
-
-        signInTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                let credential = try await credentials.credential(for: provider)
-                _ = try await auth.signIn(with: credential, consent: .now())
-            } catch let authError as AuthError {
-                // Backing out is a choice, not a failure — no alert.
-                if authError != .cancelled { error = authError }
-            } catch is CancellationError {
-                // Superseded or torn down; nothing to report.
-            } catch {
-                self.error = .unknown(error.localizedDescription)
-            }
-            signingInWith = nil
-        }
-    }
-
-    /// Retry the last failed attempt.
-    func retry(provider: AuthProvider) {
-        error = nil
-        signIn(with: provider, hasConsented: true)
-    }
-
-    /// Abandon an in-flight sign-in.
-    func cancelSignIn() {
-        signInTask?.cancel()
-        signingInWith = nil
-    }
-
-    // MARK: - Guest linking
-
-    /// Upgrade the signed-in guest to a real account, keeping its uid and
-    /// everything built under it.
-    func linkGuestAccount(with provider: AuthProvider) async {
-        guard user?.isGuest == true else { return }
-        signingInWith = provider
-        defer { signingInWith = nil }
-
-        do {
-            let credential = try await credentials.credential(for: provider)
-            _ = try await auth.linkGuestAccount(with: credential)
-        } catch let authError as AuthError {
-            if authError != .cancelled { error = authError }
-        } catch {
-            self.error = .unknown(error.localizedDescription)
-        }
+        route = user.hasValidProfileState ? .main : .onboarding
     }
 
     // MARK: - Profile
 
-    /// The only way profile changes reach storage.
-    func updateProfile(_ profile: Profile) async {
+    /// The only way profile changes reach storage. Returns whether the save
+    /// landed, for callers whose next step depends on it (deleting photo
+    /// bytes must wait for the record change to be confirmed).
+    @discardableResult
+    func updateProfile(_ profile: Profile) async -> Bool {
         do {
             try await auth.updateProfile(profile)
+            return true
+        } catch let authError as AuthError {
+            self.error = authError
         } catch {
-            self.error = .unknown(error.localizedDescription)
+            self.error = .unknown("Your profile could not be saved. Please try again.")
         }
+        return false
     }
 
     func completeOnboarding() async {
         do {
             try await auth.completeOnboarding()
+        } catch let authError as AuthError {
+            self.error = authError
         } catch {
-            self.error = .unknown(error.localizedDescription)
+            self.error = .unknown("Your profile could not be saved. Please try again.")
         }
     }
 
     func signOut() {
-        Task {
-            try? await auth.signOut()
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await auth.signOut()
+            } catch {
+                // A failed sign-out leaves the session in place; saying nothing
+                // would strand the user on a screen that looks signed out.
+                self.error = .unknown("Could not sign out. Please try again.")
+            }
+        }
+    }
+
+    // MARK: - Account deletion
+
+    /// True while a deletion is running, so the UI can disable the control.
+    @Published private(set) var isDeletingAccount = false
+
+    /// Permanently deletes the account. On success the auth service publishes
+    /// nil and routing lands on welcome; on failure the existing error alert
+    /// explains, and the session is untouched.
+    func deleteAccount() async {
+        guard !isDeletingAccount else { return }
+        isDeletingAccount = true
+        defer { isDeletingAccount = false }
+
+        do {
+            try await auth.deleteAccount()
+        } catch let authError as AuthError {
+            self.error = authError
+        } catch {
+            self.error = .unknown("Your account could not be deleted. Please try again.")
         }
     }
 }

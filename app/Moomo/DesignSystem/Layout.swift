@@ -37,10 +37,10 @@ enum Radius {
     static let checkbox: CGFloat = 6
     /// Chat bubble.
     static let bubble: CGFloat = 18
-    /// Local video preview on the call screen.
-    static let localVideo: CGFloat = 12
-    /// Remote video on the call screen.
-    static let remoteVideo: CGFloat = 20
+    /// Self-view preview in the corner of the speed-call video card.
+    static let localVideo: CGFloat = 14
+    /// The speed-call video card.
+    static let callCard: CGFloat = 28
     /// Fully rounded — use `.capsule` shapes instead where possible.
     static let pill: CGFloat = 999
 }
@@ -62,10 +62,10 @@ enum Size {
     static let chatModeTileHeight: CGFloat = 200
 
     // Call
-    static let callSecondaryControl: CGFloat = 72
-    static let callEndControl: CGFloat = 88
-    static let localVideoWidth: CGFloat = 110
-    static let localVideoHeight: CGFloat = 150
+    static let callSecondaryControl: CGFloat = 64
+    static let callEndControl: CGFloat = 76
+    static let localVideoWidth: CGFloat = 92
+    static let localVideoHeight: CGFloat = 120
 
     // Decision / Match
     static let decisionAvatar: CGFloat = 110
@@ -123,6 +123,11 @@ enum Shadows {
     /// Coral CTA — tinted, not neutral.
     static let coralCTA = ShadowStyle(
         color: Color(hex: 0xEF3E56, alpha: 0.32), radius: 18, x: 0, y: 8
+    )
+
+    /// Warm peach halo around the speed-call video card.
+    static let callCard = ShadowStyle(
+        color: Color(hex: 0xF2B48C, alpha: 0.45), radius: 26, x: 0, y: 8
     )
 
     /// Avatars with a white ring.

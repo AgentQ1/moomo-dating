@@ -2,18 +2,36 @@ import SwiftUI
 
 /// A circular avatar.
 ///
-/// Until photo loading exists, this renders a deterministic initial-and-tint
-/// placeholder: the same person always gets the same colour, so the orbit in
-/// Discover reads as a set of distinct people rather than identical grey
-/// discs. The reference uses real photographs — this is scaffolding, and is
-/// replaced when Storage-backed image loading lands.
+/// Shows the person's photo when `photoPath` names one in Storage, loading it
+/// through the same `RemotePhotoView`/`PhotoImageCache` pipeline as every
+/// other profile photo. Without a path — older profiles, blocked-user
+/// rows — it falls back to a deterministic initial-and-tint placeholder: the
+/// same person always gets the same colour, so a set of avatars still reads
+/// as distinct people.
 struct AvatarView: View {
     var name: String
-    var size: CGFloat
-    /// Remote photo path. When set, the loader will use it.
     var photoPath: String?
+    var size: CGFloat
 
     var body: some View {
+        ZStack {
+            if let photoPath {
+                RemotePhotoView(
+                    remotePath: photoPath,
+                    service: PhotoServiceFactory.make()
+                ) {
+                    initialsPlaceholder
+                }
+            } else {
+                initialsPlaceholder
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .accessibilityHidden(true)
+    }
+
+    private var initialsPlaceholder: some View {
         ZStack {
             Circle().fill(tint)
 
@@ -21,8 +39,6 @@ struct AvatarView: View {
                 .font(.system(size: size * 0.38, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.95))
         }
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
     }
 
     private var initial: String {

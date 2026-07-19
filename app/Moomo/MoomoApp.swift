@@ -2,11 +2,21 @@ import SwiftUI
 
 @main
 struct MoomoApp: App {
+    /// UIKit bridge for Firebase Phone Auth: APNs registration, the silent
+    /// verification push, and auth callback URLs all arrive through delegate
+    /// methods SwiftUI has no equivalent for.
+    @UIApplicationDelegateAdaptor(MoomoAppDelegate.self) private var appDelegate
     @StateObject private var session: SessionStore
 
     init() {
-        // Must run before anything touches Auth or Firestore.
-        FirebaseBootstrap.configureIfNeeded()
+        // Firebase is deliberately NOT configured here. This initializer runs
+        // before UIApplicationMain, and FirebaseAuth (an always-eager Firebase
+        // component) captures UIApplication.sharedApplication during
+        // configure() — nil at this point, which permanently disables its
+        // phone-auth machinery (every verifyPhoneNumber then fails with the
+        // "app delegate swizzling" error, and the first APNs token delivery
+        // crashes). MoomoAppDelegate.didFinishLaunching configures instead,
+        // and runs before any view — or the session below — exists.
 
         // UI tests need a cold, signed-out app. Without this each test would
         // inherit the previous one's account and drafts.
@@ -25,8 +35,9 @@ struct MoomoApp: App {
             RootView()
                 .environmentObject(session)
                 .onOpenURL { url in
-                    // Google's OAuth callback. Without this the sheet returns
-                    // to a blank screen rather than the app.
+                    // Phone verification's reCAPTCHA return. Without this the
+                    // web page comes back to a blank screen rather than the
+                    // app.
                     _ = FirebaseBootstrap.handle(url: url)
                 }
         }
@@ -74,7 +85,7 @@ struct RootView: View {
                     LaunchView()
 
                 case .welcome:
-                    WelcomeView()
+                    WelcomeView(auth: session.auth)
 
                 case .onboarding:
                     if let user = session.user {
@@ -87,24 +98,27 @@ struct RootView: View {
                     }
 
                 case .main:
-                    MainTabView()
+                    // Keyed by id so switching accounts rebuilds the tab
+                    // shell and its per-session services — one user's
+                    // matches, chats, and blocks must never leak to another.
+                    if let user = session.user {
+                        MainTabView(user: user)
+                            .id(user.id)
+                    } else {
+                        LaunchView()
+                    }
                 }
             }
             .transition(.opacity)
         }
         .animation(Motion.transition, value: session.route)
         .alert(
-            "Sign-in failed",
+            "Something went wrong",
             isPresented: Binding(
                 get: { session.error != nil },
                 set: { if !$0 { session.error = nil } }
             )
         ) {
-            if let error = session.error,
-               error.isRetryable,
-               let provider = session.lastAttemptedProvider {
-                Button("Try again") { session.retry(provider: provider) }
-            }
             Button("OK", role: .cancel) { session.error = nil }
         } message: {
             Text(session.error?.errorDescription ?? "Something went wrong.")

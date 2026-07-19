@@ -36,5 +36,15 @@ or a mistake.
 
 ## Status
 
-Screen 1 (welcome/auth) built and visually iterated against its reference.
-Screens 2–13 not started. Backend not started.
+Live app against Firebase project `moomo-c7a37`: phone OTP sign-in (the only
+auth method), onboarding, all five tabs (Discover, Calls, Matches, Chat,
+Profile), speed calls over LiveKit with server matchmaking, mutual-match
+gating, chat, blocking/reporting, boosts, and account deletion.
+
+Matchmaking pairs only mutually compatible users (gender + who they want to
+meet) and ranks actively boosted waiters first; Discover applies the same
+compatibility filter. See `backend/README.md` for the callable surface and
+`docs/IMPLEMENTATION_MAP.md` for the screen-by-screen map.
+
+App Check is wired client-side but not enforced (`docs/FIREBASE_SETUP.md`).
+Light mode is locked in `app/Info.plist` until a real dark palette ships.

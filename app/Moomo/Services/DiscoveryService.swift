@@ -8,10 +8,19 @@ struct DiscoveryCandidate: Identifiable, Equatable, Sendable {
     var displayName: String
     var age: Int
     var city: String
-    var photoName: String?
+    /// "Marketing Student" — the second line of the call-screen identity
+    /// overlay. Optional: older public profiles don't carry one.
+    var occupation: String?
+    /// Storage path of their primary photo (`photoPaths[0]` in the public
+    /// projection, `photoPath` in a participant summary). Nil renders the
+    /// initials placeholder.
+    var photoPath: String?
     var isOnline: Bool
     /// They've signalled interest and are waiting on a call.
     var wantsToTalk: Bool
+    /// Server-granted photo verification. Read from the public projection,
+    /// never written by the client — a self-serve badge would be worthless.
+    var isVerified: Bool = false
     var pronoun: CandidatePronoun
 }
 
@@ -39,7 +48,8 @@ struct DiscoveryState: Equatable, Sendable {
     /// The avatars orbiting the hero.
     var nearby: [DiscoveryCandidate]
     var level: Int
-    var hasUnreadNotifications: Bool
+    // Unread state deliberately lives with `NotificationService`, not here —
+    // discovery describes who's around, not the bell.
     var community: String?
 }
 
@@ -85,25 +95,26 @@ extension DiscoveryState {
             displayName: "Kenji",
             age: 26,
             city: "Chicago",
-            photoName: nil,
+            occupation: "Marketing Student",
+            photoPath: nil,
             isOnline: true,
             wantsToTalk: true,
+            isVerified: true,
             pronoun: .he
         ),
         nearby: [
-            DiscoveryCandidate(id: "u-1", displayName: "Anaya", age: 24, city: "Chicago", photoName: nil, isOnline: true, wantsToTalk: false, pronoun: .she),
-            DiscoveryCandidate(id: "u-2", displayName: "Mei", age: 27, city: "Chicago", photoName: nil, isOnline: true, wantsToTalk: false, pronoun: .she),
-            DiscoveryCandidate(id: "u-3", displayName: "Zara", age: 25, city: "Evanston", photoName: nil, isOnline: false, wantsToTalk: false, pronoun: .she),
-            DiscoveryCandidate(id: "u-4", displayName: "Priya", age: 23, city: "Chicago", photoName: nil, isOnline: true, wantsToTalk: false, pronoun: .she),
-            DiscoveryCandidate(id: "u-5", displayName: "Sofia", age: 28, city: "Oak Park", photoName: nil, isOnline: true, wantsToTalk: false, pronoun: .she)
+            DiscoveryCandidate(id: "u-1", displayName: "Anaya", age: 24, city: "Chicago", occupation: "Graphic Designer", photoPath: nil, isOnline: true, wantsToTalk: false, isVerified: true, pronoun: .she),
+            DiscoveryCandidate(id: "u-2", displayName: "Mei", age: 27, city: "Chicago", occupation: "Nurse", photoPath: nil, isOnline: true, wantsToTalk: false, isVerified: true, pronoun: .she),
+            DiscoveryCandidate(id: "u-3", displayName: "Zara", age: 25, city: "Evanston", occupation: "Grad Student", photoPath: nil, isOnline: false, wantsToTalk: false, isVerified: true, pronoun: .she),
+            DiscoveryCandidate(id: "u-4", displayName: "Priya", age: 23, city: "Chicago", occupation: "Software Engineer", photoPath: nil, isOnline: true, wantsToTalk: false, isVerified: true, pronoun: .she),
+            DiscoveryCandidate(id: "u-5", displayName: "Sofia", age: 28, city: "Oak Park", occupation: "Barista", photoPath: nil, isOnline: true, wantsToTalk: false, isVerified: true, pronoun: .she)
         ],
         level: 1,
-        hasUnreadNotifications: true,
         community: "IIT Stuart School of Business"
     )
 
     static let empty = DiscoveryState(
         featured: nil, nearby: [], level: 1,
-        hasUnreadNotifications: false, community: "IIT Stuart School of Business"
+        community: "IIT Stuart School of Business"
     )
 }

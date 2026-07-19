@@ -54,14 +54,7 @@ final class DiscoverModel: ObservableObject {
         await task.value
     }
 
-    /// Placed for the matchmaking work. Nothing is faked here: until the queue
-    /// exists, tapping does nothing rather than pretending to place a call.
-    func startCall(with candidate: DiscoveryCandidate) {}
-
-    func startMode(_ mode: CallMode) {}
-}
-
-enum CallMode: String, Sendable {
-    case video
-    case voice
+    // Starting calls is deliberately not here: the call flow outlives this
+    // screen (it must survive tab switches), so `CallCoordinator` owns it and
+    // the view hands the taps straight over.
 }

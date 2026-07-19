@@ -14,15 +14,16 @@ struct FirestoreProfileStore: ProfileStore {
     /// writes the fields that are actually absent or stale. Running it twice —
     /// which happens routinely, since the auth listener fires on every launch —
     /// produces the same result as running it once.
-    func bootstrap(
-        uid: String,
-        provider: AuthProvider,
-        providerDisplayName: String?,
-        consent: ConsentRecord?
-    ) async throws -> User {
+    ///
+    /// The transaction already read the document, so the resulting `User` is
+    /// decoded from that read merged with what was just written — a follow-up
+    /// `load` here cost an extra network round trip on every launch and
+    /// sign-in. Unresolved server timestamps are the only difference, and
+    /// `decode` falls back sensibly for those.
+    func bootstrap(uid: String, consent: ConsentRecord?) async throws -> User {
         let userRef = db.collection(FirestorePath.users).document(uid)
 
-        _ = try await db.runTransaction { transaction, errorPointer -> Any? in
+        let result = try await db.runTransaction { transaction, errorPointer -> Any? in
             let snapshot: DocumentSnapshot
             do {
                 snapshot = try transaction.getDocument(userRef)
@@ -32,22 +33,13 @@ struct FirestoreProfileStore: ProfileStore {
             }
 
             if snapshot.exists {
-                // Existing account. Only ever touch provider metadata and
-                // updatedAt. Everything the user has entered is left alone —
-                // this path runs on every relaunch, and writing profile fields
-                // here would let stale provider data clobber real answers.
+                // Existing account. Only ever touch consent and updatedAt.
+                // Everything the user has entered is left alone — this path
+                // runs on every relaunch, and writing profile fields here
+                // would let stale data clobber real answers.
                 var patch: [String: Any] = [
-                    "authProvider": provider.rawValue,
                     "updatedAt": FieldValue.serverTimestamp()
                 ]
-
-                // Fill a blank display name from the provider, never replace a
-                // real one. Apple gives the name exactly once, so if the first
-                // write missed it this is the only chance to recover it.
-                let existingName = (snapshot.data()?["displayName"] as? String) ?? ""
-                if existingName.isEmpty, let providerDisplayName, !providerDisplayName.isEmpty {
-                    patch["displayName"] = providerDisplayName
-                }
 
                 // Re-record consent only when it is missing or superseded.
                 if let consent {
@@ -59,14 +51,22 @@ struct FirestoreProfileStore: ProfileStore {
                 }
 
                 transaction.updateData(patch, forDocument: userRef)
-                return nil
+
+                // What the document now holds: the read state plus the patch.
+                // Server timestamps are unresolved locally; skip them and let
+                // the stored value (or decode's fallback) stand.
+                var merged = snapshot.data() ?? [:]
+                for (key, value) in patch where !(value is FieldValue) {
+                    merged[key] = value
+                }
+                return merged
             }
 
             // First sight of this uid.
             var document: [String: Any] = [
                 "uid": uid,
-                "authProvider": provider.rawValue,
-                "displayName": providerDisplayName ?? "",
+                "authProvider": AuthProvider.phone.rawValue,
+                "displayName": "",
                 "createdAt": FieldValue.serverTimestamp(),
                 "updatedAt": FieldValue.serverTimestamp()
             ]
@@ -75,10 +75,13 @@ struct FirestoreProfileStore: ProfileStore {
                 document["consentDocumentVersion"] = consent.documentVersion
             }
             transaction.setData(document, forDocument: userRef)
-            return nil
+            return document
         }
 
-        return try await load(uid: uid)
+        guard let data = result as? [String: Any] else {
+            throw AuthError.unknown("Profile not found.")
+        }
+        return Self.decode(uid: uid, data: data)
     }
 
     // MARK: - Update
@@ -86,26 +89,41 @@ struct FirestoreProfileStore: ProfileStore {
     func update(uid: String, profile: Profile) async throws -> User {
         let userRef = db.collection(FirestorePath.users).document(uid)
 
+        // These are merge writes, so every optional the profile has CLEARED
+        // must write `FieldValue.delete()` — leaving the key out would let the
+        // stale value survive the save and resurface on the next load.
         var document: [String: Any] = [
             "displayName": profile.displayName,
             "bio": profile.bio,
             "interests": Array(profile.interests),
             "updatedAt": FieldValue.serverTimestamp()
         ]
-        if let dob = profile.dateOfBirth { document["dateOfBirth"] = Timestamp(date: dob) }
-        if let gender = profile.gender { document["gender"] = gender.rawValue }
-        if !profile.interestedIn.isEmpty {
-            document["interestedIn"] = profile.interestedIn.map(\.rawValue)
-        }
+        document["dateOfBirth"] = profile.dateOfBirth.map { Timestamp(date: $0) as Any }
+            ?? FieldValue.delete()
+        document["gender"] = profile.gender.map { $0.rawValue as Any } ?? FieldValue.delete()
+        document["interestedIn"] = profile.interestedIn.isEmpty
+            ? FieldValue.delete()
+            : profile.interestedIn.map(\.rawValue).sorted()
         if let location = profile.location {
             // City-level only. There is no coordinate field to write.
             document["locationCity"] = location.city
-            document["locationRegion"] = location.region as Any
             document["locationCountry"] = location.countryCode
+            // Never insert a nil optional as `Any` — Firestore rejects it.
+            // Cities without a region (London) delete any stale value instead,
+            // since this is a merge write.
+            document["locationRegion"] = location.region ?? FieldValue.delete()
+        } else {
+            document["locationCity"] = FieldValue.delete()
+            document["locationCountry"] = FieldValue.delete()
+            document["locationRegion"] = FieldValue.delete()
         }
-        document["photoCount"] = profile.photos.count
-
-        try await userRef.setData(document, merge: true)
+        // The real photo records, ordered. Previously this wrote only a count,
+        // which meant a reload could not tell which photos existed — it
+        // reconstructed placeholders from the number. Storing the paths is what
+        // makes photos survive a relaunch.
+        document["photos"] = profile.photos
+            .sorted { $0.order < $1.order }
+            .map { ["id": $0.id, "remotePath": $0.remotePath, "order": $0.order] }
 
         // The public projection carries only what Discover shows. Date of birth
         // and consent are pointedly absent — the rules reject them, and this is
@@ -115,13 +133,36 @@ struct FirestoreProfileStore: ProfileStore {
             "displayName": profile.displayName,
             "updatedAt": FieldValue.serverTimestamp()
         ]
-        if let age = profile.age { publicDocument["age"] = age }
-        if let city = profile.location?.city { publicDocument["city"] = city }
-        if let gender = profile.gender { publicDocument["gender"] = gender.rawValue }
+        // Cleared optionals delete here too — a stale public age or city is
+        // shown to strangers long after the user removed it.
+        publicDocument["age"] = profile.age.map { $0 as Any } ?? FieldValue.delete()
+        publicDocument["city"] = profile.location.map { $0.city as Any } ?? FieldValue.delete()
+        publicDocument["gender"] = profile.gender.map { $0.rawValue as Any } ?? FieldValue.delete()
+        // Who they want to meet, so Discover and matchmaking can pair only
+        // mutually compatible people. This is the projection Discover renders
+        // its feed from; matchmaking reads the same field server-side.
+        publicDocument["interestedIn"] = profile.interestedIn.isEmpty
+            ? FieldValue.delete()
+            : profile.interestedIn.map(\.rawValue).sorted()
 
-        try await db.collection(FirestorePath.publicProfiles)
-            .document(uid)
-            .setData(publicDocument, merge: true)
+        // Photo paths, so Discover can render a face without reading the
+        // private document. Paths only — the bytes stay behind Storage rules,
+        // and age is already derived here rather than exposing date of birth.
+        publicDocument["photoPaths"] = profile.photos
+            .sorted { $0.order < $1.order }
+            .map(\.remotePath)
+
+        // One atomic batch, not two sequential writes: the private profile and
+        // its public projection must never diverge because the second write
+        // failed — and one round trip is faster than two.
+        let batch = db.batch()
+        batch.setData(document, forDocument: userRef, merge: true)
+        batch.setData(
+            publicDocument,
+            forDocument: db.collection(FirestorePath.publicProfiles).document(uid),
+            merge: true
+        )
+        try await batch.commit()
 
         return try await load(uid: uid)
     }
@@ -142,6 +183,17 @@ struct FirestoreProfileStore: ProfileStore {
         guard let data = snapshot.data() else {
             throw AuthError.unknown("Profile not found.")
         }
+        return Self.decode(uid: uid, data: data)
+    }
+
+    /// The offline-launch fallback: the user document from the local cache
+    /// only. Never hits the network — an offline cold launch must not sit on
+    /// the splash screen forever when the profile is already on disk.
+    func loadCached(uid: String) async -> User? {
+        guard let snapshot = try? await db.collection(FirestorePath.users)
+            .document(uid).getDocument(source: .cache),
+            let data = snapshot.data()
+        else { return nil }
         return Self.decode(uid: uid, data: data)
     }
 
@@ -166,12 +218,24 @@ struct FirestoreProfileStore: ProfileStore {
                 countryCode: country
             )
         }
-        // Photo bytes live in Storage; this is enough for completeness checks
-        // until the upload pipeline lands.
-        let photoCount = data["photoCount"] as? Int ?? 0
-        profile.photos = (0..<photoCount).map {
-            ProfilePhoto(id: "\(uid)-\($0)", remotePath: nil, order: $0)
-        }
+        // Photo bytes live in Storage; these are the pointers to them.
+        //
+        // A record without a `remotePath` is dropped rather than defaulted: it
+        // would be a photo whose bytes we cannot fetch, and admitting one would
+        // reintroduce exactly the "profile claims a photo the server never
+        // received" bug the non-optional `remotePath` exists to prevent.
+        profile.photos = (data["photos"] as? [[String: Any]] ?? [])
+            .compactMap { entry in
+                guard let id = entry["id"] as? String,
+                      let remotePath = entry["remotePath"] as? String,
+                      !remotePath.isEmpty else { return nil }
+                return ProfilePhoto(
+                    id: id,
+                    remotePath: remotePath,
+                    order: entry["order"] as? Int ?? 0
+                )
+            }
+            .sorted { $0.order < $1.order }
         profile.isVerified = data["isVerified"] as? Bool ?? false
 
         var consent: ConsentRecord?
@@ -182,8 +246,10 @@ struct FirestoreProfileStore: ProfileStore {
 
         return User(
             id: uid,
+            // Unknown/legacy provider strings (old "guest" docs) fall back to
+            // phone — every live account has a verified number.
             authProvider: (data["authProvider"] as? String)
-                .flatMap(AuthProvider.init(rawValue:)) ?? .guest,
+                .flatMap(AuthProvider.init(rawValue:)) ?? .phone,
             consent: consent,
             profile: profile,
             createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),

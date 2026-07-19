@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+   Drives the REAL app against the REAL moomo-c7a37 project through the UI.
+
+   Separate from `Moomo` on purpose: that scheme's UI suite forces
+   `-use-mock-backend` and must stay deterministic and offline. This one omits
+   the flag, so the app resolves to live Firebase.
+
+       xcodebuild test -project Moomo.xcodeproj -scheme MoomoLiveUI \
+         -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+
+   Leaves a users/{uid} document behind — the rules forbid client deletion by
+   design. Clear it with backend/scripts/cleanup-integration-data.sh (pass the
+   confirm flag).
+-->
+<Scheme
+   LastUpgradeVersion = "2650"
+   version = "1.7">
+   <BuildAction
+      parallelizeBuildables = "YES"
+      buildImplicitDependencies = "YES">
+      <BuildActionEntries>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "1A0000000000000000000002"
+               BuildableName = "Moomo.app"
+               BlueprintName = "Moomo"
+               ReferencedContainer = "container:Moomo.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <TestAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      shouldUseLaunchSchemeArgsEnv = "NO">
+      <Testables>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "1A0000000000000000000050"
+               BuildableName = "MoomoLiveUITests.xctest"
+               BlueprintName = "MoomoLiveUITests"
+               ReferencedContainer = "container:Moomo.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+      </Testables>
+   </TestAction>
+   <LaunchAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      launchStyle = "0"
+      useCustomWorkingDirectory = "NO"
+      ignoresPersistentStateOnLaunch = "NO"
+      debugDocumentVersioning = "YES"
+      debugServiceExtension = "internal"
+      allowLocationSimulation = "YES">
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "1A0000000000000000000002"
+            BuildableName = "Moomo.app"
+            BlueprintName = "Moomo"
+            ReferencedContainer = "container:Moomo.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </LaunchAction>
+   <AnalyzeAction
+      buildConfiguration = "Debug">
+   </AnalyzeAction>
+</Scheme>

@@ -2,12 +2,13 @@ import Foundation
 
 // MARK: - Identity
 
-/// How an account was created. Guests can later link to a real provider,
-/// which upgrades the account in place and keeps the uid.
+/// How an account was created. Phone OTP is the only sign-in method: every
+/// account is backed by a verified phone number. Legacy provider strings in
+/// old documents ("guest", "apple", "google") decode as `.phone` via
+/// `FirestoreProfileStore`'s fallback; restored sessions without a verified
+/// number are signed out by `FirebaseAuthenticationService`, never resumed.
 enum AuthProvider: String, Codable, Sendable, CaseIterable {
-    case apple
-    case google
-    case guest
+    case phone
 }
 
 /// Consent, recorded so we can prove what was agreed to and when.
@@ -92,11 +93,22 @@ struct CityLocation: Codable, Equatable, Sendable {
 }
 
 /// A profile photo that has been uploaded.
+///
+/// `remotePath` is deliberately **not** optional. A `ProfilePhoto` may only
+/// exist once its bytes are stored, so holding one is proof the upload
+/// succeeded. In-flight and failed uploads are represented separately, by
+/// `PhotoUploadQueue.Item`, and never enter the profile.
+///
+/// This is what stops the class of bug where onboarding completes with photos
+/// the server has never seen: "has at least one photo" and "has at least one
+/// uploaded photo" are now the same statement, and no validation rule has to
+/// remember the difference.
 struct ProfilePhoto: Codable, Equatable, Identifiable, Sendable {
     var id: String
-    /// Remote path. Nil while the photo is still local-only (mock mode, or
-    /// queued for upload).
-    var remotePath: String?
+    /// Storage path, e.g. `users/{uid}/photos/{id}.jpg`. Never a download URL:
+    /// those carry a token that rotates, and a rotated token would silently
+    /// break every photo already written to Firestore.
+    var remotePath: String
     var order: Int
 }
 
@@ -114,12 +126,17 @@ struct Profile: Codable, Equatable, Sendable {
     var bio: String = ""
     var interests: Set<String> = []
     var isVerified: Bool = false
-    var school: String?
 
     /// Age in whole years. Nil if no date of birth.
     var age: Int? {
         guard let dateOfBirth else { return nil }
         return Calendar.current.dateComponents([.year], from: dateOfBirth, to: Date()).year
+    }
+
+    /// Storage path of the main photo — the lowest `order`, matching what the
+    /// public projection publishes as `photoPaths[0]`.
+    var primaryPhotoPath: String? {
+        photos.min(by: { $0.order < $1.order })?.remotePath
     }
 }
 
@@ -191,8 +208,21 @@ struct User: Codable, Equatable, Identifiable, Sendable {
     var createdAt: Date
     /// Set when onboarding has been completed end to end.
     var onboardingCompletedAt: Date?
+    /// The verified phone number in E.164, straight from the auth backend —
+    /// never persisted to the profile document. Every live session has one:
+    /// phone OTP is the only sign-in method.
+    var phoneNumber: String?
 
-    var isGuest: Bool { authProvider == .guest }
+    /// Whether consent is recorded and current.
+    ///
+    /// Split out from `hasValidProfileState` because the two failures need
+    /// different destinations: a missing field means "resume onboarding", but
+    /// missing consent means "go back to welcome and consent". Onboarding
+    /// cannot fix consent — it has no step for it — so conflating them is what
+    /// soft-locked accounts whose document was created without consent.
+    var hasRecordedCurrentConsent: Bool {
+        consent?.isCurrent == true
+    }
 
     /// Whether this account may enter the main app.
     ///
@@ -201,9 +231,9 @@ struct User: Codable, Equatable, Identifiable, Sendable {
     /// account that completed onboarding under an older policy is sent back to
     /// re-consent rather than waved through.
     var hasValidProfileState: Bool {
-        guard let consent, consent.isCurrent else { return false }
+        guard hasRecordedCurrentConsent else { return false }
         guard onboardingCompletedAt != nil else { return false }
-        return ProfileRequirements.missingFields(in: profile, isGuest: isGuest).isEmpty
+        return ProfileRequirements.missingFields(in: profile).isEmpty
     }
 }
 
@@ -212,10 +242,8 @@ struct User: Codable, Equatable, Identifiable, Sendable {
 /// What a profile needs, and how complete it is.
 enum ProfileRequirements {
 
-    /// Fields required before entering the app. Guests are held to a smaller
-    /// bar — they get a minimal temporary profile — but the age gate and a
-    /// name are never optional for anyone.
-    static func missingFields(in profile: Profile, isGuest: Bool) -> [ProfileField] {
+    /// Fields required before entering the app.
+    static func missingFields(in profile: Profile) -> [ProfileField] {
         var missing: [ProfileField] = []
 
         if profile.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -226,18 +254,15 @@ enum ProfileRequirements {
         }
         if profile.gender == nil { missing.append(.gender) }
         if profile.interestedIn.isEmpty { missing.append(.interestedIn) }
-
-        if !isGuest {
-            if profile.location == nil { missing.append(.location) }
-            if profile.photos.isEmpty { missing.append(.photos) }
-        }
+        if profile.location == nil { missing.append(.location) }
+        if profile.photos.isEmpty { missing.append(.photos) }
 
         return missing
     }
 
     /// Weighted completion, as shown on the profile screen ("85% Profile
     /// Complete"). Required fields carry more weight than embellishments.
-    static func completionPercentage(for profile: Profile, isGuest: Bool) -> Int {
+    static func completionPercentage(for profile: Profile) -> Int {
         let checks: [(done: Bool, weight: Double)] = [
             (!profile.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, 15),
             (profile.dateOfBirth != nil, 15),

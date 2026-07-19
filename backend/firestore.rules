@@ -5,13 +5,20 @@ rules_version = '2';
 // Deny by default: the final `match /{document=**}` denies everything that
 // isn't explicitly allowed above, and nothing here grants a blanket read.
 //
-// Scope: only what the current app spine needs — user bootstrap, onboarding
-// resume/completion, and profile read/write. Matchmaking, calls, decisions,
-// matches, chat, blocks, and reports are NOT covered yet and are therefore
-// denied. That is intentional: an unwritten rule must fail closed.
+// Scope: the app spine (user bootstrap, onboarding resume/completion, profile
+// read/write, self-serve account deletion) plus the social domains —
+// callSessions, matches, conversations, messages, matchmakingQueue, blocks,
+// reports, boosts, per-user call history and notifications. The social
+// collections are written ONLY by the Cloud Functions backend
+// (backend/functions); the client reads its own slices and appends messages.
+// Server-owned collections stay entirely client-unwritable.
 //
-// NOT DEPLOYED. Verify the active project is moomo-c7a37 before any deploy —
-// moomoios-2026 is the Moomo AI app and must never receive these.
+// Verified by the emulator suite in backend/rules-tests — run `npm test` there
+// before any change lands here, then deploy with
+// `firebase deploy --only firestore:rules --project moomo-c7a37`.
+//
+// Verify `firebase use` returns moomo-c7a37 before any deploy — moomoios-2026
+// is the Moomo AI app and must never receive these.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -43,6 +50,25 @@ service cloud.firestore {
       return request.resource.data.updatedAt == request.time;
     }
 
+    // The 18+ backstop. The client enforces the exact calendar rule; this
+    // exists so a tampered client cannot write an underage date of birth at
+    // all. 567,993,600,000 ms = 6,574 days ≈ 18 years including leap days —
+    // deliberately a hair *under* every possible calendar-18 so no legitimate
+    // 18-year-old is ever rejected at the boundary.
+    function hasValidAgeIfPresent(data) {
+      return !('dateOfBirth' in data)
+             || (data.dateOfBirth is timestamp
+                 && data.dateOfBirth.toMillis()
+                      <= request.time.toMillis() - 567993600000);
+    }
+
+    // Must match `ConsentRecord.currentVersion` in the app
+    // (app/Moomo/Models/Profile.swift). Bump both together when the legal
+    // documents change.
+    function isCurrentConsentVersion(version) {
+      return version == '2026-07-15';
+    }
+
     // ---------------------------------------------------------------
     // users/{uid} — private account data. Owner-only, never public.
     // ---------------------------------------------------------------
@@ -54,52 +80,335 @@ service cloud.firestore {
                     && hasServerUpdatedAt()
                     && noPrivilegedFields(request.resource.data)
                     // uid is the document id; it may not disagree with it.
-                    && request.resource.data.uid == uid;
+                    && request.resource.data.uid == uid
+                    && hasValidAgeIfPresent(request.resource.data)
+                    // Consent, when recorded, must be to the current documents
+                    // — a tampered client cannot backdate agreement.
+                    && (!('consentDocumentVersion' in request.resource.data)
+                        || isCurrentConsentVersion(
+                             request.resource.data.consentDocumentVersion));
 
       allow update: if isSelf(uid)
                     && hasServerUpdatedAt()
                     && noPrivilegedFields(request.resource.data)
                     // Immutable once written.
                     && request.resource.data.uid == resource.data.uid
-                    && request.resource.data.createdAt == resource.data.createdAt;
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && hasValidAgeIfPresent(request.resource.data)
+                    // Consent may stay what it was (routine profile writes) or
+                    // move to the current version (re-consent) — never to
+                    // anything else.
+                    && (!('consentDocumentVersion' in request.resource.data)
+                        || isCurrentConsentVersion(
+                             request.resource.data.consentDocumentVersion)
+                        || request.resource.data.consentDocumentVersion
+                             == resource.data.get('consentDocumentVersion', ''));
 
-      // Deletion goes through the account-deletion job, which must also clean
-      // up photos, messages, and call history. A bare client delete would
-      // orphan all of it.
+      // Account deletion is the deleteAccount callable ONLY (Admin SDK): it
+      // is the only path that reaches the server-owned social data (matches,
+      // conversations, sessions, queue, boosts), Storage photos, and the
+      // Auth user. A client-side delete would orphan all of it.
       allow delete: if false;
 
       // -------------------------------------------------------------
       // users/{uid}/private/onboarding — the resumable draft.
+      //
+      // Only the documented draft document, not an open-ended keyspace —
+      // arbitrary private documents would complicate deletion and migration.
       // -------------------------------------------------------------
       match /private/{document} {
-        allow read, write: if isSelf(uid);
+        allow read, write: if isSelf(uid) && document == 'onboarding';
+      }
+
+      // -------------------------------------------------------------
+      // users/{uid}/callHistory/{sessionId} — this user's PRIVATE view
+      // of a finished call, written by the backend.
+      //
+      // Per-user on purpose: the person who blocked sees "blocked", the
+      // person who was blocked sees an ordinary ended call. A shared
+      // record cannot keep that secret, so there isn't one.
+      // -------------------------------------------------------------
+      match /callHistory/{sessionId} {
+        allow get, list: if isSelf(uid);
+        allow create, update, delete: if false; // server-owned
+      }
+
+      // -------------------------------------------------------------
+      // users/{uid}/notifications/{notificationId} — the bell feed.
+      // Backend-written; the owner may only mark them read.
+      // -------------------------------------------------------------
+      match /notifications/{notificationId} {
+        allow get, list: if isSelf(uid);
+        allow update: if isSelf(uid)
+                      && request.resource.data.diff(resource.data)
+                           .affectedKeys().hasOnly(['isRead'])
+                      && request.resource.data.isRead == true;
+        allow create, delete: if false; // server-owned
       }
     }
 
     // ---------------------------------------------------------------
     // publicProfiles/{uid} — the projection other users may see.
     //
-    // Deliberately NOT readable by all signed-in users yet. Discover runs on
-    // local mock data today, so nothing needs this; opening it now would
-    // expose every profile to any account with no blocking, no reciprocity,
-    // and no rate limiting in place. It opens when Discover is served from
-    // Firestore and blocks exist to gate it.
+    // Open to signed-in users: Discover is served from here now, and blocks
+    // exist to gate what the client renders. Remaining hardening is Phase 5:
+    // App Check on reads and a backend-composed feed (server-side block
+    // filtering, rate limits). Until then any authenticated account can read
+    // public projections — which contain only what Discover shows.
     // ---------------------------------------------------------------
     match /publicProfiles/{uid} {
-      allow get, list: if isSelf(uid);
+      allow get: if isSignedIn();
+      // Anti-scrape brake: reads must come in app-sized pages. Discover asks
+      // for 25; nothing legitimate asks for more than 50 at once.
+      allow list: if isSignedIn() && request.query.limit <= 50;
+
+      // The EXACT public schema. A whitelist rather than a blacklist of
+      // private fields: anything not listed — a privileged flag, a private
+      // field, a server field nobody thought to forbid — is refused, so a
+      // leak requires adding a key here on purpose.
+      // wantsToTalk/boostedUntil appear because merge writes carry the
+      // server-set values through; the diff guard below keeps clients from
+      // ever CHANGING them.
+      function publicSchemaOnly(data) {
+        return data.keys().hasOnly([
+          'uid', 'displayName', 'age', 'city', 'gender', 'interestedIn',
+          'photoPaths', 'occupation', 'lastActiveAt', 'updatedAt',
+          'wantsToTalk', 'boostedUntil'
+        ]);
+      }
+
+      // A public photo path must point into the OWNER's Storage folder — a
+      // projection referencing someone else's photo is identity theft.
+      function ownsPhotoPath(path) {
+        return path is string && path.matches('users/' + uid + '/photos/[^/]+');
+      }
+
+      // Rules have no loops; the photo grid caps at six, so six slot checks
+      // cover every element.
+      function photoPathsValid(data) {
+        return !('photoPaths' in data)
+               || (data.photoPaths is list
+                   && data.photoPaths.size() <= 6
+                   && (data.photoPaths.size() < 1 || ownsPhotoPath(data.photoPaths[0]))
+                   && (data.photoPaths.size() < 2 || ownsPhotoPath(data.photoPaths[1]))
+                   && (data.photoPaths.size() < 3 || ownsPhotoPath(data.photoPaths[2]))
+                   && (data.photoPaths.size() < 4 || ownsPhotoPath(data.photoPaths[3]))
+                   && (data.photoPaths.size() < 5 || ownsPhotoPath(data.photoPaths[4]))
+                   && (data.photoPaths.size() < 6 || ownsPhotoPath(data.photoPaths[5])));
+      }
+
+      function publicFieldsValid(data) {
+        return (!('displayName' in data)
+                  || (data.displayName is string && data.displayName.size() <= 100))
+               && (!('age' in data)
+                  || (data.age is int && data.age >= 18 && data.age <= 120))
+               && (!('city' in data)
+                  || (data.city is string && data.city.size() >= 1 && data.city.size() <= 100))
+               && (!('gender' in data)
+                  || data.gender in ['woman', 'man', 'nonBinary', 'other'])
+               && (!('interestedIn' in data)
+                  || (data.interestedIn is list
+                      && data.interestedIn.size() >= 1
+                      && data.interestedIn.size() <= 3
+                      && data.interestedIn.hasOnly(['women', 'men', 'everyone'])))
+               && (!('occupation' in data)
+                  || (data.occupation is string && data.occupation.size() <= 100))
+               && photoPathsValid(data);
+      }
+
+      // Presence may only say "now": a client writing an arbitrary
+      // lastActiveAt could fake being online for weeks.
+      function presenceIsHonest(data, before) {
+        return !data.diff(before).affectedKeys().hasAny(['lastActiveAt'])
+               || data.lastActiveAt == request.time;
+      }
 
       allow create, update: if isSelf(uid)
                             && hasServerUpdatedAt()
-                            && noPrivilegedFields(request.resource.data)
-                            // A public profile must never carry private data.
-                            // Date of birth and precise location are the two
-                            // that would do real harm if they leaked.
-                            && !request.resource.data.keys().hasAny([
-                                 'dateOfBirth', 'email', 'phoneNumber',
-                                 'latitude', 'longitude', 'consent'
+                            // The document is keyed by its owner and must say so.
+                            && request.resource.data.uid == uid
+                            && publicSchemaOnly(request.resource.data)
+                            && publicFieldsValid(request.resource.data)
+                            && presenceIsHonest(
+                                 request.resource.data,
+                                 resource == null ? {} : resource.data
+                               )
+                            // Server-set signals. A client that could write
+                            // these would advertise itself as waiting or
+                            // boosted without being either.
+                            && !request.resource.data.diff(
+                                 resource == null ? {} : resource.data
+                               ).affectedKeys().hasAny([
+                                 'wantsToTalk', 'boostedUntil'
                                ]);
 
+      // Deletion goes through the deleteAccount callable; see users/{uid}.
       allow delete: if false;
+    }
+
+    // ---------------------------------------------------------------
+    // matchmakingQueue/{uid} — one entry per user, backend-managed.
+    //
+    // The client reads ONLY its own entry (it listens for the `matched`
+    // transition and its sessionId). All writes go through the
+    // joinMatchmakingQueue / leaveMatchmakingQueue callables — a client
+    // that could write queue state could impersonate a waiting user or
+    // pair itself with someone who never asked.
+    // ---------------------------------------------------------------
+    match /matchmakingQueue/{uid} {
+      allow get: if isSelf(uid);
+      allow list: if false;
+      allow create, update, delete: if false; // server-owned
+    }
+
+    // The membership test shared by every two-person document. `resource`
+    // (not `request.resource`): you may only see documents the *server*
+    // already says you belong to. A list query must be constrained to the
+    // caller (array-contains their uid) or the whole query is denied.
+    function isParticipant() {
+      return isSignedIn() && request.auth.uid in resource.data.participantIds;
+    }
+
+    // ---------------------------------------------------------------
+    // callSessions/{sessionId} — server-owned call state.
+    //
+    // Created, updated, and closed by the matchmaking backend. The client
+    // only ever reads its own sessions; letting a client write call state
+    // is how a tampered client extends a timer or forges call history.
+    // ---------------------------------------------------------------
+    match /callSessions/{sessionId} {
+      allow get, list: if isParticipant();
+      allow create, update, delete: if false; // server-owned
+
+      // Like/pass decisions. Closed to BOTH participants: your peer's
+      // decision must never be readable — "they passed" and "they haven't
+      // decided" have to stay indistinguishable. The backend reads these
+      // with the Admin SDK; outcomes reach each user only through their
+      // private callHistory projection.
+      match /decisions/{decidingUid} {
+        allow read, write: if false;
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // matches/{matchId} — server-owned; exists only on mutual like.
+    //
+    // Clients submit *decisions* through the backend, never matches. A
+    // client-writable match would let anyone mint "you both said yes".
+    // ---------------------------------------------------------------
+    match /matches/{matchId} {
+      allow get, list: if isParticipant();
+      allow create, update, delete: if false; // server-owned
+    }
+
+    // ---------------------------------------------------------------
+    // conversations/{conversationId} — one per match, server-created.
+    // Messages are the only thing participants write.
+    // ---------------------------------------------------------------
+    match /conversations/{conversationId} {
+      allow get, list: if isParticipant();
+      allow create, delete: if false; // server-owned
+
+      // The one client-writable thing on a conversation: marking YOUR OWN
+      // unread counter read. Nothing else may change — not the preview, not
+      // the participants, not the other person's counter.
+      allow update: if isParticipant()
+                    && request.resource.data.diff(resource.data)
+                         .affectedKeys().hasOnly(['unreadCounts'])
+                    && request.resource.data.unreadCounts
+                         .diff(resource.data.get('unreadCounts', {}))
+                         .affectedKeys().hasOnly([request.auth.uid])
+                    && request.resource.data.unreadCounts[request.auth.uid] == 0;
+
+      // Participants of the parent conversation may read the thread and
+      // append messages as themselves. Nothing may be edited or deleted
+      // from the client — retention/moderation owns that.
+      match /messages/{messageId} {
+        function parentConversation() {
+          return get(/databases/$(database)/documents/conversations/$(conversationId));
+        }
+        function isThreadParticipant() {
+          return isSignedIn()
+                 && request.auth.uid in parentConversation().data.participantIds;
+        }
+        // The other person in this two-person thread.
+        function threadPeer() {
+          return parentConversation().data.participantIds[0] == request.auth.uid
+              ? parentConversation().data.participantIds[1]
+              : parentConversation().data.participantIds[0];
+        }
+        // A block in EITHER direction silences the thread. blockUser deletes
+        // the conversation in the same transaction as the block, so this
+        // should never be the deciding check — it exists so that even a
+        // conversation document that outlives a crashed cascade accepts
+        // nothing from a blocked pair.
+        function neitherBlockedEachOther() {
+          return !exists(/databases/$(database)/documents/blocks/$(request.auth.uid)/blocked/$(threadPeer()))
+                 && !exists(/databases/$(database)/documents/blocks/$(threadPeer())/blocked/$(request.auth.uid));
+        }
+        // Conversations the backend writes today carry no status field and
+        // are open; any future tombstone (status != 'open') refuses messages
+        // without a rules change.
+        function conversationIsOpen() {
+          return parentConversation().data.get('status', 'open') == 'open';
+        }
+
+        allow get, list: if isThreadParticipant();
+
+        allow create: if isThreadParticipant()
+                      && conversationIsOpen()
+                      && neitherBlockedEachOther()
+                      // You may only speak as yourself.
+                      && request.resource.data.senderId == request.auth.uid
+                      && request.resource.data.text is string
+                      && request.resource.data.text.size() >= 1
+                      && request.resource.data.text.size() <= 1000
+                      && request.resource.data.sentAt == request.time
+                      // Exactly the documented shape — no smuggled fields.
+                      && request.resource.data.keys().hasOnly(['senderId', 'text', 'sentAt']);
+
+        allow update, delete: if false;
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // blocks/{uid}/blocked/{blockedUid} — the blocker's private list.
+    //
+    // Owner-only reads: nobody may learn who blocked them. Creation goes
+    // through the blockUser callable ONLY, because a block must always
+    // cascade (matches and conversations removed, live calls ended) — a
+    // direct client write would be a half-block that leaves the chat open.
+    // Unblock stays a plain owner delete: it cascades nothing by design.
+    // ---------------------------------------------------------------
+    match /blocks/{uid}/blocked/{blockedUid} {
+      allow get, list: if isSelf(uid);
+      allow create, update: if false; // blockUser callable only
+      allow delete: if isSelf(uid);   // unblock
+    }
+
+    // ---------------------------------------------------------------
+    // reports/{reportId} — entirely server-owned.
+    //
+    // Filing goes through the reportUser callable, which validates the
+    // reason, caps report volume per account, and stamps moderation state.
+    // Nobody outside moderation tooling (Admin SDK, which bypasses rules)
+    // may ever read, alter, or delete a report — including its author.
+    // ---------------------------------------------------------------
+    match /reports/{reportId} {
+      allow read, write: if false; // reportUser callable + Admin SDK only
+    }
+
+    // ---------------------------------------------------------------
+    // boosts/{uid} — server-owned boost entitlement state.
+    //
+    // The owner watches their own document; activation goes through the
+    // activateBoost callable. Client-writable boost state would be a
+    // self-granted entitlement the moment boosts cost money.
+    // ---------------------------------------------------------------
+    match /boosts/{uid} {
+      allow get: if isSelf(uid);
+      allow list: if false;
+      allow create, update, delete: if false; // activateBoost callable only
     }
 
     // ---------------------------------------------------------------

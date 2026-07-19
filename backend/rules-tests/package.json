@@ -1,0 +1,14 @@
+{
+  "name": "moomo-rules-tests",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Firestore and Storage security rules tests. Emulator only — never touches a live project.",
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore,storage --project moomo-rules-test 'node --test firestore.rules.test.mjs storage.rules.test.mjs'"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.0.0"
+  }
+}

@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Partial Info.plist. `GENERATE_INFOPLIST_FILE` stays YES, so Xcode merges the
+  generated keys (and every INFOPLIST_KEY_* build setting) on top of this. Only
+  what the generator cannot express belongs here.
+
+  CFBundleURLTypes is exactly that case: it is an array of dictionaries, and the
+  INFOPLIST_KEY_* mechanism only carries scalars. There is no
+  INFOPLIST_KEY_CFBundleURLTypes, despite what the older setup notes claimed.
+
+  The scheme below is the REVERSED_CLIENT_ID of the iOS OAuth client for
+  moomo-c7a37 (client 998689337464-94t8qa0jq52c8989spb8ijgeelbk7me7). Without
+  it, Google's OAuth callback has nowhere to land and sign-in returns to a blank
+  screen instead of the app.
+
+  It is not a secret — an OAuth client id ships inside every copy of the app
+  binary, and Google documents it as public. It is kept here rather than read
+  from GoogleService-Info.plist because Info.plist must be static at build time,
+  and because that file is gitignored.
+-->
+<plist version="1.0">
+<dict>
+	<!--
+	  Usage strings live HERE, not as INFOPLIST_KEY_* build settings: iOS
+	  terminates the app on the spot if AVFoundation requests access without
+	  the matching key in the built product, so the strings must be impossible
+	  to lose to a build-settings merge or a target misconfiguration.
+	-->
+	<key>NSCameraUsageDescription</key>
+	<string>Moomo uses your camera for 3-minute video speed calls. Your video is never recorded or stored.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Moomo uses your microphone for voice and video speed calls. Your audio is never recorded or stored.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Moomo needs access to your photos so you can add profile pictures and share images with your matches.</string>
+	<!--
+	  Light mode only, for now. The design system (Palette) is a single light
+	  theme; without this lock, system chrome (alerts, sheets, keyboards) went
+	  dark over light custom UI on dark-mode devices. Remove when a real dark
+	  palette ships.
+	-->
+	<key>UIUserInterfaceStyle</key>
+	<string>Light</string>
+	<!--
+	  Firebase AppDelegate swizzling is off on purpose. MoomoAppDelegate already
+	  forwards everything Phone Auth needs by hand — the APNs token via
+	  Auth.setAPNSToken, the silent verification push via
+	  Auth.canHandleNotification, and callback URLs via Auth.canHandle(url).
+	  With swizzling left on, Firebase proxies the delegate a second time and
+	  logs the "app delegate swizzling is disabled ... canHandleNotification"
+	  error against the SwiftUI adaptor.
+	-->
+	<key>FirebaseAppDelegateProxyEnabled</key>
+	<false/>
+	<!--
+	  Required for phone auth's silent APNs verification push. Without this
+	  mode iOS does not deliver content-available pushes to
+	  didReceiveRemoteNotification, so every verification falls back to the
+	  reCAPTCHA web page even with the APNs key configured.
+	-->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.moomo.dating.google-signin</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.998689337464-94t8qa0jq52c8989spb8ijgeelbk7me7</string>
+			</array>
+		</dict>
+		<!--
+		  Firebase Phone Auth's reCAPTCHA fallback returns to the app on the
+		  Encoded App ID scheme — GOOGLE_APP_ID 1:998689337464:ios:ca57cd2d8363fae941fd8d
+		  with "app-" prefixed and colons dashed, as shown in Firebase Console >
+		  Project settings > General. It is NOT the reversed client id above;
+		  without it the reCAPTCHA sheet cannot come back to the app.
+		-->
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.moomo.dating.firebase-phone-auth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>app-1-998689337464-ios-ca57cd2d8363fae941fd8d</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

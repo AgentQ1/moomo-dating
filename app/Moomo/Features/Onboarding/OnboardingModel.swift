@@ -52,12 +52,6 @@ enum OnboardingStep: Int, CaseIterable, Identifiable, Codable {
         }
     }
 
-    /// Guests get a shortened flow — enough for a temporary profile and the
-    /// age gate, without demanding photos or a bio from someone just looking.
-    static func steps(isGuest: Bool) -> [OnboardingStep] {
-        guard isGuest else { return allCases }
-        return [.name, .dateOfBirth, .gender, .interestedIn, .cameraAndMic, .safety, .review]
-    }
 }
 
 /// Everything onboarding collects, and the resume point.
@@ -85,11 +79,26 @@ final class OnboardingModel: ObservableObject {
     @Published private(set) var isFinishing = false
     @Published var validationMessage: String?
 
-    let isGuest: Bool
     private let storage: OnboardingDraftStorage
     private let userID: String
+    private let photoService: PhotoUploadService
 
-    var steps: [OnboardingStep] { OnboardingStep.steps(isGuest: isGuest) }
+    /// Owned here rather than by `PhotosStep` so an upload survives the user
+    /// tapping Continue and walking on — the view is torn down on every step
+    /// change, and a queue living there would cancel in-flight uploads.
+    private(set) lazy var photoQueue: PhotoUploadQueue = PhotoUploadQueue(
+        uid: userID,
+        service: photoService,
+        currentPhotoCount: { [weak self] in self?.draft.profile.photos.count ?? 0 },
+        onUploaded: { [weak self] photo in self?.addUploadedPhoto(photo) }
+    )
+
+    /// The same service the queue uploads through, exposed so photo tiles can
+    /// read bytes back. One service means an uploaded photo is always readable
+    /// by the view that just uploaded it.
+    var photoDisplayService: PhotoUploadService { photoService }
+
+    var steps: [OnboardingStep] { OnboardingStep.allCases }
 
     var currentIndex: Int {
         steps.firstIndex(of: draft.currentStep) ?? 0
@@ -104,11 +113,12 @@ final class OnboardingModel: ObservableObject {
 
     init(
         user: User,
-        storage: OnboardingDraftStorage = .standard
+        storage: OnboardingDraftStorage = .standard,
+        photoService: PhotoUploadService = PhotoServiceFactory.make()
     ) {
-        self.isGuest = user.isGuest
         self.storage = storage
         self.userID = user.id
+        self.photoService = photoService
 
         // Resume where they left off, seeded from whatever the account already
         // has (an Apple display name, say).
@@ -128,21 +138,118 @@ final class OnboardingModel: ObservableObject {
     func update(_ mutate: (inout Profile) -> Void) {
         mutate(&draft.profile)
         validationMessage = nil
-        persist()
+        // Debounced: this runs on every keystroke of the name and bio fields,
+        // and encoding + writing UserDefaults per keystroke is wasted work.
+        // Anything that matters more than half a second of typing (step
+        // changes, photos, completion) flushes explicitly.
+        persistSoon()
     }
 
     func setSafetyAcknowledged(_ value: Bool) {
         draft.acknowledgedSafety = value
-        persist()
+        needsPersist = true
+        persistNow()
     }
 
     func markPermissionExplainerSeen() {
         draft.sawPermissionExplainer = true
-        persist()
+        needsPersist = true
+        persistNow()
     }
 
-    private func persist() {
+    // MARK: - Persistence
+
+    private var persistTask: Task<Void, Never>?
+    private var needsPersist = false
+
+    private func persistSoon() {
+        needsPersist = true
+        guard persistTask == nil else { return }
+        persistTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            self?.persistNow()
+        }
+    }
+
+    private func persistNow() {
+        persistTask?.cancel()
+        persistTask = nil
+        guard needsPersist else { return }
+        needsPersist = false
         storage.save(draft, for: userID)
+    }
+
+    // Deliberately no save in deinit: `draft` is main-actor state and a deinit
+    // is not. The exposure is bounded — every step change, photo change,
+    // toggle, and finish flushes synchronously, so at most ~400ms of *typing*
+    // can be lost, and only if the model is torn down mid-keystroke.
+    deinit {
+        persistTask?.cancel()
+    }
+
+    // MARK: - Photos
+
+    /// Called by the queue once bytes are stored. Never call this with a photo
+    /// that hasn't uploaded — the type makes that impossible, and that is the
+    /// point.
+    ///
+    /// The photo arrives with the order the queue reserved for it at selection
+    /// time. It is inserted by that order — not appended — so a batch keeps the
+    /// user's selection order however the uploads interleave. While uploads are
+    /// still in flight the orders are left sparse (their slots are reserved);
+    /// they are compacted once the queue settles.
+    private func addUploadedPhoto(_ photo: ProfilePhoto) {
+        update { profile in
+            let index = profile.photos.firstIndex { $0.order > photo.order }
+                ?? profile.photos.endIndex
+            profile.photos.insert(photo, at: index)
+
+            if photoQueue.items.isEmpty {
+                Self.renumber(&profile.photos)
+            }
+        }
+        // An uploaded photo is server state; the draft must never lag it.
+        persistNow()
+    }
+
+    /// Removes the photo and deletes its bytes.
+    ///
+    /// The record goes immediately so the grid responds at once; the Storage
+    /// delete follows and is allowed to fail. An orphaned object costs a
+    /// fraction of a cent and is swept by the account-deletion job — blocking
+    /// the UI on it, or worse restoring the tile on failure, would be a far
+    /// worse trade.
+    func removePhoto(id: String) {
+        guard let photo = draft.profile.photos.first(where: { $0.id == id }) else { return }
+
+        update { profile in
+            profile.photos.removeAll { $0.id == id }
+            Self.renumber(&profile.photos)
+        }
+        persistNow()
+
+        Task { [photoService] in
+            try? await photoService.delete(remotePath: photo.remotePath)
+        }
+    }
+
+    /// Drag-to-reorder. Index 0 is the primary photo.
+    func movePhotos(from source: IndexSet, to destination: Int) {
+        update { profile in
+            profile.photos.move(fromOffsets: source, toOffset: destination)
+            Self.renumber(&profile.photos)
+        }
+        persistNow()
+    }
+
+    /// `order` must always match array position, because it is what Firestore
+    /// sorts on when the profile is read back. Letting the two drift is how the
+    /// primary photo silently changes on reload.
+    private static func renumber(_ photos: inout [ProfilePhoto]) {
+        for index in photos.indices {
+            photos[index].order = index
+        }
     }
 
     // MARK: - Navigation
@@ -156,7 +263,8 @@ final class OnboardingModel: ObservableObject {
             withAnimation(Motion.transition) {
                 draft.currentStep = next
             }
-            persist()
+            needsPersist = true
+            persistNow()
             return true
         }
         validationMessage = failure
@@ -169,17 +277,20 @@ final class OnboardingModel: ObservableObject {
         withAnimation(Motion.transition) {
             draft.currentStep = previous
         }
-        persist()
+        needsPersist = true
+        persistNow()
     }
 
+    #if DEBUG
     /// Test seam: jump straight to a step instead of walking the flow to reach
     /// it. Not called from app code — validation for a step is otherwise only
     /// reachable by satisfying every step before it, which makes each test a
-    /// test of the whole flow.
+    /// test of the whole flow. DEBUG-only so it cannot ship.
     func jumpToStepForTesting(_ step: OnboardingStep) {
         draft.currentStep = step
         validationMessage = nil
     }
+    #endif
 
     // MARK: - Validation
 
@@ -214,7 +325,21 @@ final class OnboardingModel: ObservableObject {
             return profile.location == nil ? "Please set your city." : nil
 
         case .photos:
-            return profile.photos.isEmpty ? "Please add at least one photo." : nil
+            // `profile.photos` only ever holds uploaded photos, so this is
+            // already "at least one photo whose bytes are stored".
+            if profile.photos.isEmpty {
+                // Distinguish "you haven't picked one" from "yours is still
+                // going" — otherwise a user who picked a photo two seconds ago
+                // is told to add one, which reads as the app losing it.
+                if photoQueue.isUploading {
+                    return "Hang on — your photo is still uploading."
+                }
+                if photoQueue.hasFailures {
+                    return "Your photo didn't upload. Retry it or pick another."
+                }
+                return "Please add at least one photo."
+            }
+            return nil
 
         case .bio:
             if profile.bio.count > 300 { return "Please keep your bio under 300 characters." }
@@ -230,7 +355,7 @@ final class OnboardingModel: ObservableObject {
             return draft.acknowledgedSafety ? nil : "Please accept the community guidelines."
 
         case .review:
-            let missing = ProfileRequirements.missingFields(in: profile, isGuest: isGuest)
+            let missing = ProfileRequirements.missingFields(in: profile)
             guard missing.isEmpty else {
                 return "Still needed: \(missing.map(\.label).joined(separator: ", "))."
             }
@@ -241,22 +366,56 @@ final class OnboardingModel: ObservableObject {
     // MARK: - Completion
 
     /// Writes the profile through `SessionStore` and marks onboarding done.
-    /// The draft is only discarded after both succeed, so a failure here
-    /// leaves the user able to resume rather than losing everything.
+    ///
+    /// Ordering matters. The profile is written first and onboarding is marked
+    /// complete only if that write succeeded — the reverse order can mark an
+    /// account complete whose profile never landed, and `hasValidProfileState`
+    /// would then bounce it straight back to onboarding with no explanation.
+    ///
+    /// The draft is only discarded after both succeed, so a failure leaves the
+    /// user able to resume rather than losing everything.
     func finish(session: SessionStore) async {
-        guard validateCurrentStep() == nil else {
-            validationMessage = validateCurrentStep()
+        // Whatever happens next, the draft on disk matches what's on screen —
+        // a failure mid-finish must resume with nothing missing.
+        persistNow()
+
+        if let failure = validateCurrentStep() {
+            validationMessage = failure
             return
         }
-        isFinishing = true
-        defer { isFinishing = false }
 
-        await session.updateProfile(draft.profile)
-        await session.completeOnboarding()
+        // The last line of defence for "no completion without a real photo".
+        // Reachable in ways the photos step alone is not: a user can pass the
+        // photos step, reach review, and delete their only photo on the way —
+        // review's own check would still pass, because it reads the same
+        // requirements the photos step already satisfied.
+        guard let failure = uploadGateFailure() else {
+            isFinishing = true
+            defer { isFinishing = false }
 
-        if session.error == nil {
+            await session.updateProfile(draft.profile)
+            guard session.error == nil else { return }
+
+            await session.completeOnboarding()
+            guard session.error == nil else { return }
+
             storage.clear(for: userID)
+            return
         }
+        validationMessage = failure
+    }
+
+    /// Why completion is not allowed yet, or nil if it is.
+    func uploadGateFailure() -> String? {
+        if photoQueue.isUploading {
+            return "Hang on — your photo is still uploading."
+        }
+        if draft.profile.photos.isEmpty {
+            return photoQueue.hasFailures
+                ? "Your photo didn't upload. Retry it or pick another."
+                : "Please add at least one photo."
+        }
+        return nil
     }
 }
 

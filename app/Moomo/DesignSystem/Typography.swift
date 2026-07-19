@@ -44,7 +44,17 @@ enum Typography {
     static let message = Font.system(size: 16, weight: .regular)
 
     /// "3-Minute Speed Call" header.
-    static let callHeader = Font.system(size: 17, weight: .medium)
+    static let callHeader = Font.system(size: 17, weight: .semibold)
+
+    /// "Time left 02:39" under the call header. Monospaced digits so the
+    /// countdown doesn't jitter.
+    static let callSubtitle = Font.system(size: 13, weight: .regular).monospacedDigit()
+
+    /// "Marketing Student" / "London, UK" rows on the call identity overlay.
+    static let callDetail = Font.system(size: 14, weight: .medium)
+
+    /// "Mute" / "End Call" / "Camera" under the call controls.
+    static let callControlLabel = Font.system(size: 13, weight: .medium)
 
     // MARK: - Small
 

@@ -1,0 +1,48 @@
+rules_version = '2';
+
+// Moomo — Storage rules.
+//
+// Layout:
+//     users/{uid}/photos/{photoId}.jpg   profile photos
+//
+// Deny by default: the trailing `match /{allPaths=**}` denies anything not
+// explicitly allowed. Nothing here grants a blanket write.
+//
+// Run `npm test` in backend/rules-tests before changing this file.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // A profile photo, after client-side downsampling, has no business being
+    // larger than this. The cap is enforced here rather than only in the app so
+    // a tampered client cannot fill the bucket.
+    function isReasonablySizedImage() {
+      return request.resource.size < 5 * 1024 * 1024
+             && request.resource.contentType.matches('image/jpe?g');
+    }
+
+    match /users/{uid}/photos/{photoId} {
+      // Any signed-in user, matching publicProfiles in Firestore: Discover,
+      // Matches, Chat, and Calls all render other people's profile photos, so
+      // the photo a public profile points at must be readable by the accounts
+      // that can see that profile. Never public — an unauthenticated request
+      // with a leaked path still gets nothing.
+      allow read: if isSignedIn();
+
+      allow write: if isSelf(uid) && isReasonablySizedImage();
+      allow delete: if isSelf(uid);
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

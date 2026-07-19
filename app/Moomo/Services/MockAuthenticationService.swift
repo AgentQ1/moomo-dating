@@ -3,16 +3,22 @@ import Foundation
 /// In-memory authentication, used until a real Firebase project is configured.
 ///
 /// This is **not** a fake-success stub. It runs the same state machine the
-/// Firebase implementation will: real async work, real latency, real
+/// Firebase implementation does: real async work, real latency, real
 /// cancellation, real failures, and persistence across relaunches (via
-/// `UserDefaults` rather than a server). Onboarding resume, guest linking, and
-/// returning-user routing therefore behave identically in both modes, which is
-/// the point — bugs in those flows surface here rather than after the backend
-/// lands.
+/// `UserDefaults` rather than a server). The phone OTP flow, onboarding
+/// resume, and returning-user routing therefore behave identically in both
+/// modes, which is the point — bugs in those flows surface here rather than
+/// after the backend lands.
 ///
 /// It is labeled in the UI by `MockModeBanner` and can never be reached when a
 /// real config is present.
 final class MockAuthenticationService: AuthenticationService, @unchecked Sendable {
+
+    /// The only SMS code the mock accepts. Fixed so UI tests can type it.
+    static let validVerificationCode = "123456"
+
+    /// The verification id "sent" by the mock SMS round trip.
+    static let mockVerificationID = "mock-verification-id"
 
     /// Simulated round trip. Long enough that loading states are real and
     /// visible, short enough not to be irritating.
@@ -25,6 +31,9 @@ final class MockAuthenticationService: AuthenticationService, @unchecked Sendabl
     private let store: MockUserStore
     private let lock = NSLock()
     private var _currentUser: User?
+    /// The number the last verification SMS was "sent" to, so verifying the
+    /// code knows which number it proves ownership of.
+    private var pendingPhoneNumber: String?
     private var continuations: [UUID: AsyncStream<User?>.Continuation] = [:]
 
     init(latency: Duration = .milliseconds(700), store: MockUserStore = .standard) {
@@ -56,28 +65,32 @@ final class MockAuthenticationService: AuthenticationService, @unchecked Sendabl
         }
     }
 
-    // MARK: - Sign in
+    // MARK: - Phone OTP
 
-    func signIn(with credential: ProviderCredential, consent: ConsentRecord) async throws -> User {
+    func sendCode(to phoneNumber: String) async throws -> String {
         try await simulateRoundTrip()
 
-        let provider: AuthProvider
-        var name = ""
-
-        switch credential {
-        case .apple(_, _, let fullName, _):
-            provider = .apple
-            name = fullName ?? ""
-        case .google:
-            provider = .google
-        case .anonymous:
-            provider = .guest
+        // The same rough shape check a backend would run before sending.
+        let digits = phoneNumber.filter(\.isNumber)
+        guard phoneNumber.hasPrefix("+"), digits.count >= 8, digits.count <= 15 else {
+            throw AuthError.invalidPhoneNumber
         }
 
-        // Returning user: same provider identity keeps its uid and everything
-        // built under it, including partially-finished onboarding.
-        if let existing = store.loadUser(forProvider: provider) {
-            var user = existing
+        lock.withLock { pendingPhoneNumber = phoneNumber }
+        return Self.mockVerificationID
+    }
+
+    /// The phone number is the identity: the same number always signs into the
+    /// same stored account, a new number creates one — mirroring how Firebase
+    /// resolves a verified number to its uid.
+    func signIn(verificationID: String, code: String, consent: ConsentRecord) async throws -> User {
+        try await simulateRoundTrip()
+
+        let phoneNumber = try consumeVerifiedPhone(verificationID: verificationID, code: code)
+
+        // Returning user: same number keeps its uid and everything built under
+        // it, including partially-finished onboarding.
+        if var user = store.loadUser(forPhone: phoneNumber) {
             // Re-record consent if the policy moved on since they last agreed.
             if user.consent?.isCurrent != true {
                 user.consent = consent
@@ -86,50 +99,37 @@ final class MockAuthenticationService: AuthenticationService, @unchecked Sendabl
             return user
         }
 
-        var profile = Profile()
-        profile.displayName = name
-
         let user = User(
-            id: "mock-\(provider.rawValue)-\(UUID().uuidString.prefix(8))",
-            authProvider: provider,
+            id: "mock-phone-\(UUID().uuidString.prefix(8))",
+            authProvider: .phone,
             consent: consent,
-            profile: profile,
+            profile: Profile(),
             createdAt: Date(),
-            onboardingCompletedAt: nil
+            onboardingCompletedAt: nil,
+            phoneNumber: phoneNumber
         )
         persist(user)
         return user
     }
 
-    // MARK: - Linking
+    /// Checks the code against the pending SMS and hands back the proven
+    /// number. Single-use, like a real verification session.
+    private func consumeVerifiedPhone(verificationID: String, code: String) throws -> String {
+        lock.lock()
+        let pending = pendingPhoneNumber
+        lock.unlock()
 
-    func linkGuestAccount(with credential: ProviderCredential) async throws -> User {
-        try await simulateRoundTrip()
-
-        guard var user = currentUser else {
-            throw AuthError.unknown("Not signed in.")
+        guard verificationID == Self.mockVerificationID, let pending else {
+            throw AuthError.verificationExpired
         }
-        guard user.isGuest else {
-            throw AuthError.unknown("Only guest accounts can be linked.")
-        }
-
-        let provider: AuthProvider
-        switch credential {
-        case .apple: provider = .apple
-        case .google: provider = .google
-        case .anonymous: throw AuthError.unknown("Cannot link a guest to a guest.")
+        guard code == Self.validVerificationCode else {
+            throw AuthError.invalidVerificationCode
         }
 
-        // A provider identity may back only one account.
-        if store.loadUser(forProvider: provider) != nil {
-            throw AuthError.credentialAlreadyInUse
-        }
-
-        // Upgrade in place: same uid, same profile, same onboarding progress.
-        store.removeUser(forProvider: .guest)
-        user.authProvider = provider
-        persist(user)
-        return user
+        lock.lock()
+        pendingPhoneNumber = nil
+        lock.unlock()
+        return pending
     }
 
     // MARK: - Profile
@@ -150,12 +150,34 @@ final class MockAuthenticationService: AuthenticationService, @unchecked Sendabl
 
     func signOut() async throws {
         try await Task.sleep(for: .milliseconds(200))
-        lock.lock()
-        _currentUser = nil
-        let targets = Array(continuations.values)
-        lock.unlock()
+        let targets = lock.withLock {
+            _currentUser = nil
+            return Array(continuations.values)
+        }
 
         store.clearSession()
+        targets.forEach { $0.yield(nil) }
+    }
+
+    // MARK: - Account deletion
+
+    /// Mirrors the real service: the account and its data are gone for good,
+    /// unlike sign-out, which keeps the stored user for the next sign-in.
+    func deleteAccount() async throws {
+        try await simulateRoundTrip()
+
+        let (user, targets) = lock.withLock {
+            let user = _currentUser
+            _currentUser = nil
+            return (user, Array(continuations.values))
+        }
+
+        guard let user else { throw AuthError.unknown("Not signed in.") }
+        if let phoneNumber = user.phoneNumber {
+            store.removeUser(forPhone: phoneNumber)
+        }
+        store.clearSession()
+        OnboardingDraftStorage.standard.clear(for: user.id)
         targets.forEach { $0.yield(nil) }
     }
 
@@ -189,41 +211,40 @@ final class MockAuthenticationService: AuthenticationService, @unchecked Sendabl
 }
 
 /// Disk-backed storage for the mock backend, so onboarding survives relaunch
-/// exactly as it will against a real server.
+/// exactly as it will against a real server. Accounts are keyed by verified
+/// phone number — the same identity rule the real backend applies.
 final class MockUserStore: @unchecked Sendable {
     static let standard = MockUserStore(defaults: .standard)
 
     private let defaults: UserDefaults
-    private let sessionKey = "mock.session.provider"
-    private let userKeyPrefix = "mock.user."
+    private let sessionKey = "mock.session.phone"
+    private let userKeyPrefix = "mock.user.phone."
 
     init(defaults: UserDefaults) {
         self.defaults = defaults
     }
 
     func save(_ user: User) {
-        guard let data = try? JSONEncoder().encode(user) else { return }
-        defaults.set(data, forKey: userKeyPrefix + user.authProvider.rawValue)
-        defaults.set(user.authProvider.rawValue, forKey: sessionKey)
+        guard let phoneNumber = user.phoneNumber,
+              let data = try? JSONEncoder().encode(user) else { return }
+        defaults.set(data, forKey: userKeyPrefix + phoneNumber)
+        defaults.set(phoneNumber, forKey: sessionKey)
     }
 
-    func loadUser(forProvider provider: AuthProvider) -> User? {
-        guard let data = defaults.data(forKey: userKeyPrefix + provider.rawValue) else {
+    func loadUser(forPhone phoneNumber: String) -> User? {
+        guard let data = defaults.data(forKey: userKeyPrefix + phoneNumber) else {
             return nil
         }
         return try? JSONDecoder().decode(User.self, from: data)
     }
 
     func loadPersistedUser() -> User? {
-        guard
-            let raw = defaults.string(forKey: sessionKey),
-            let provider = AuthProvider(rawValue: raw)
-        else { return nil }
-        return loadUser(forProvider: provider)
+        guard let phoneNumber = defaults.string(forKey: sessionKey) else { return nil }
+        return loadUser(forPhone: phoneNumber)
     }
 
-    func removeUser(forProvider provider: AuthProvider) {
-        defaults.removeObject(forKey: userKeyPrefix + provider.rawValue)
+    func removeUser(forPhone phoneNumber: String) {
+        defaults.removeObject(forKey: userKeyPrefix + phoneNumber)
     }
 
     /// Ends the session but keeps accounts, so signing back in returns the
@@ -234,8 +255,9 @@ final class MockUserStore: @unchecked Sendable {
 
     /// Wipes everything. Tests and the debug menu only.
     func reset() {
-        for provider in AuthProvider.allCases {
-            defaults.removeObject(forKey: userKeyPrefix + provider.rawValue)
+        for key in defaults.dictionaryRepresentation().keys
+        where key.hasPrefix(userKeyPrefix) {
+            defaults.removeObject(forKey: key)
         }
         defaults.removeObject(forKey: sessionKey)
     }

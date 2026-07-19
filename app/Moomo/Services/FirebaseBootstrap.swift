@@ -4,8 +4,12 @@ import Foundation
 import FirebaseCore
 #endif
 
-#if canImport(GoogleSignIn)
-import GoogleSignIn
+#if canImport(FirebaseAppCheck)
+import FirebaseAppCheck
+#endif
+
+#if canImport(FirebaseAuth)
+import FirebaseAuth
 #endif
 
 /// Configures Firebase, exactly once.
@@ -17,54 +21,97 @@ enum FirebaseBootstrap {
 
     private static var hasConfigured = false
 
-    /// Call once, as early as possible. Safe to call repeatedly.
+    /// Call from `MoomoAppDelegate.didFinishLaunching`, and nowhere earlier.
+    /// Safe to call repeatedly.
+    ///
+    /// NOT from `MoomoApp.init`: that runs before UIApplicationMain, and
+    /// FirebaseAuth — created eagerly inside `FirebaseApp.configure()` —
+    /// captures `UIApplication.sharedApplication` on a background queue. If
+    /// the shared application does not exist yet, Auth silently skips its
+    /// APNs/notification managers and never retries: phone verification then
+    /// fails forever with the "app delegate swizzling" error, and the first
+    /// APNs token delivery force-unwraps nil and crashes.
+    ///
+    /// `hasConfigured` must only become true once Firebase actually is —
+    /// setting it on entry would let an early return (mock backend) latch
+    /// "configured" while `FirebaseApp.app()` is still nil, and every later
+    /// Auth/Firestore touch would hit the unconfigured state.
     static func configureIfNeeded() {
         guard !hasConfigured else { return }
-        hasConfigured = true
 
         #if canImport(FirebaseCore)
         // Only configure when a real config is present. `BackendConfiguration`
-        // has already refused the AI project's plist by this point.
+        // has already refused the AI project's plist by this point. Mock mode
+        // never marks Firebase configured.
         guard case .firebase = BackendConfiguration.current else { return }
-        guard FirebaseApp.app() == nil else { return }
 
+        // No `FirebaseApp.app() != nil` pre-check: asking before configure()
+        // is precisely what logs the "default Firebase app has not yet been
+        // configured" warning. `hasConfigured` is the sole double-configure
+        // guard; nothing else in this process calls `FirebaseApp.configure()`.
+
+        // App Check's factory must be set BEFORE configure() or the first
+        // token fetch races the default provider.
+        configureAppCheck()
         FirebaseApp.configure()
-        configureGoogleSignIn()
+        hasConfigured = true
         #endif
     }
 
-    /// Google Sign-In needs the OAuth client id from the plist. Firebase does
-    /// not set this up for us.
-    private static func configureGoogleSignIn() {
-        #if canImport(GoogleSignIn) && canImport(FirebaseCore)
-        guard let clientID = FirebaseApp.app()?.options.clientID else {
-            // No CLIENT_ID in the plist means no iOS OAuth client exists for
-            // this app. Apple and guest still work; Google will fail with a
-            // clear provider error rather than a crash.
-            return
-        }
-        GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientID)
+    /// Opt-in switch for App Check: `MOOMO_ENABLE_APP_CHECK=1` in the
+    /// environment, or `-MOOMO_ENABLE_APP_CHECK` as a launch argument.
+    private static var isAppCheckEnabled: Bool {
+        ProcessInfo.processInfo.environment["MOOMO_ENABLE_APP_CHECK"] == "1"
+            || ProcessInfo.processInfo.arguments.contains("-MOOMO_ENABLE_APP_CHECK")
+    }
+
+    /// App Check: App Attest on devices, the debug provider in DEBUG builds
+    /// (simulators and CI register debug tokens in the Firebase console).
+    ///
+    /// OFF unless explicitly enabled via `MOOMO_ENABLE_APP_CHECK`. The App
+    /// Check API (`firebaseappcheck.googleapis.com`) is currently disabled for
+    /// this project, so installing a provider factory just makes every token
+    /// fetch fail with a repeated 403 SERVICE_DISABLED. Before turning the
+    /// flag on: enable the Firebase App Check API in the console and register
+    /// this build's debug token, or the same 403s come back.
+    ///
+    /// This attests the APP; enforcement is server-side and currently OFF
+    /// (`enforceAppCheck` per callable, `backend/README.md`) until the app is
+    /// registered in the App Check console — flipping enforcement first would
+    /// lock every real user out.
+    private static func configureAppCheck() {
+        #if canImport(FirebaseAppCheck)
+        guard isAppCheckEnabled else { return }
+        AppCheck.setAppCheckProviderFactory(MoomoAppCheckProviderFactory())
         #endif
     }
 
-    /// Whether Google Sign-In is actually usable. False when the plist carries
-    /// no OAuth client, which is a configuration fault, not a runtime one.
-    static var isGoogleSignInConfigured: Bool {
-        #if canImport(GoogleSignIn) && canImport(FirebaseCore)
-        return FirebaseApp.app()?.options.clientID != nil
-        #else
-        return false
-        #endif
-    }
-
-    /// Forwards the OAuth callback. Without this, Google sign-in returns to a
+    /// Forwards auth callback URLs to Firebase Auth, which claims phone
+    /// verification's reCAPTCHA return. Without this the flow comes back to a
     /// blank screen instead of the app.
     @MainActor
     static func handle(url: URL) -> Bool {
-        #if canImport(GoogleSignIn)
-        return GIDSignIn.sharedInstance.handle(url)
-        #else
+        #if canImport(FirebaseAuth)
+        // Guarded: Auth.auth() traps if Firebase was never configured, which
+        // is exactly the mock-mode case.
+        if case .firebase = BackendConfiguration.current {
+            return Auth.auth().canHandle(url)
+        }
+        #endif
         return false
+    }
+}
+
+#if canImport(FirebaseAppCheck)
+/// App Attest for real devices; the debug provider under DEBUG so simulators
+/// and test runs work (their debug tokens are registered in the console).
+private final class MoomoAppCheckProviderFactory: NSObject, AppCheckProviderFactory {
+    func createProvider(with app: FirebaseApp) -> AppCheckProvider? {
+        #if DEBUG
+        AppCheckDebugProvider(app: app)
+        #else
+        AppAttestProvider(app: app)
         #endif
     }
 }
+#endif

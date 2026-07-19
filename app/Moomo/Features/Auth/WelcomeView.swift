@@ -1,123 +1,191 @@
 import SwiftUI
 
-/// Welcome / authentication — the app's first screen. Matches reference 1.
+/// Welcome / sign-in — the app's first screen. Phone OTP is the only way in:
+/// enter a number, receive an SMS code, type it, signed in.
 ///
-/// Layout notes from the reference:
-/// • The logo is optically centred in the upper two-thirds, not the screen.
-/// • Sparkles are asymmetric: a blue one above the arc with a small gold one
-///   beneath it, and a lone gold one in the arc's right-hand opening.
-/// • Three auth rows, 14pt apart.
-/// • Page dots below, the active one a blue sparkle.
+/// Layout notes from the reference (402pt design width):
+/// • Top bar: an X on the left, "Trouble logging in?" on the right.
+/// • Three overlapping circular photos, the middle one on top, centred at
+///   ~y194; the headline sits ~40pt beneath them.
+/// • Phone row (+1 ⌄ │ ☎ Enter phone number) over a hairline, then the coral
+///   "Verification" capsule.
+/// • Consent checkbox paragraph with coral links, pager dots at the bottom
+///   with the fourth dot active in coral.
+///
+/// The button renders at full strength before consent — as the reference
+/// shows — and validates the checkbox on tap instead.
 struct WelcomeView: View {
-    @EnvironmentObject private var session: SessionStore
+    @StateObject private var phone: PhoneAuthModel
 
     @State private var hasConsented = false
     @State private var legalDocument: LegalDocument?
+    @State private var isShowingLoginHelp = false
+    @FocusState private var isPhoneFocused: Bool
+
+    init(auth: AuthenticationService) {
+        _phone = StateObject(wrappedValue: PhoneAuthModel(auth: auth))
+    }
 
     var body: some View {
         ZStack {
-            Palette.cream.ignoresSafeArea()
+            Palette.blush.ignoresSafeArea()
+            watermarks
 
-            // Vertical rhythm is measured off the reference rather than left to
-            // flexible spacers, which pack the logo into the Dynamic Island on
-            // tall devices. The one flexible gap sits above the page dots, so
-            // shorter screens compress there and nothing else shifts.
-            VStack(spacing: 0) {
-                logoBlock
-                    .padding(.top, 88)
-
-                Text("Your way to smarter, happier connections.")
-                    .font(.system(size: 17, weight: .regular))
-                    .foregroundStyle(Palette.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.top, 44)
-
-                SparkleDivider()
-                    .padding(.top, 20)
-
-                ConsentRow(
-                    isChecked: $hasConsented,
-                    onOpenPrivacy: { legalDocument = .privacy },
-                    onOpenTerms: { legalDocument = .terms }
-                )
-                .padding(.horizontal, Space.gutter)
-                .padding(.top, 28)
-
-                authButtons
-                    .padding(.top, 18)
-
-                Spacer(minLength: Space.md)
-
-                PageDots(count: 7, activeIndex: 3)
-                    .padding(.bottom, 14)
+            GeometryReader { proxy in
+                ScrollView {
+                    content
+                        // Fill the screen so the pager dots sit at the bottom
+                        // on tall devices; shorter screens scroll instead.
+                        .frame(minHeight: proxy.size.height)
+                }
+                .scrollBounceBehavior(.basedOnSize)
             }
         }
         .sheet(item: $legalDocument) { document in
             LegalDocumentView(document: document)
         }
+        .fullScreenCover(isPresented: showingOTP) {
+            OTPEntryView(model: phone)
+        }
+        .alert("Trouble logging in?", isPresented: $isShowingLoginHelp) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Make sure you can receive SMS at your number. Still stuck? Email support@moomo.app.")
+        }
+        .onDisappear { phone.cancel() }
+        .animation(Motion.transition, value: phone.error)
     }
 
-    private var logoBlock: some View {
-        ZStack {
-            LogoMark()
+    private var content: some View {
+        VStack(spacing: 0) {
+            topBar
 
-            // Blue sparkle above the arc, with its gold companion beneath.
-            VStack(spacing: 2) {
-                SparkleMark(size: 22, color: Palette.blue)
-                SparkleMark(size: 13, color: Palette.gold.opacity(0.7))
+            avatarCluster
+                .padding(.top, 56)
+
+            Text("Find the person nearby you'd most like to meet")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(Palette.ink)
+                .multilineTextAlignment(.center)
+                // One line, as the reference sets it — scaled a touch rather
+                // than wrapped when the width is tight.
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.horizontal, Space.md)
+                .padding(.top, 44)
+
+            PhoneEntryRow(model: phone, isFocused: $isPhoneFocused)
+                .padding(.horizontal, Space.xl + 6)
+                .padding(.top, 44)
+
+            PhoneFlowErrorText(error: phone.error)
+                .padding(.horizontal, Space.xl)
+                .padding(.top, Space.sm)
+
+            VerificationButton(isLoading: phone.stage == .sendingCode) {
+                isPhoneFocused = false
+                phone.sendCode(hasConsented: hasConsented)
             }
-            .offset(y: -Size.logoDiameter / 2 - 26)
+            .padding(.horizontal, Space.xl)
+            .padding(.top, 30)
 
-            // Lone gold sparkle in the arc's opening.
-            SparkleMark(size: 18, color: Palette.gold)
-                .offset(x: Size.logoDiameter / 2 + 12, y: 22)
+            ConsentRow(
+                isChecked: $hasConsented,
+                onOpenPrivacy: { legalDocument = .privacy },
+                onOpenTerms: { legalDocument = .terms }
+            )
+            .padding(.horizontal, Space.xl + 4)
+            .padding(.top, 34)
+
+            Spacer(minLength: Space.xxl)
+
+            PageDots(count: 7, activeIndex: 3)
+                .padding(.bottom, Space.md)
+        }
+    }
+
+    /// The OTP screen is up from the moment the SMS is out until sign-in
+    /// succeeds (routing then replaces this screen entirely) or the user
+    /// backs out to edit the number.
+    private var showingOTP: Binding<Bool> {
+        Binding(
+            get: { phone.stage == .codeSent || phone.stage == .verifying },
+            set: { if !$0 { phone.editNumber() } }
+        )
+    }
+
+    // MARK: - Chrome
+
+    private var topBar: some View {
+        HStack {
+            Spacer()
+
+            Button("Trouble logging in?") {
+                isShowingLoginHelp = true
+            }
+            .font(.system(size: 16, weight: .regular))
+            .foregroundStyle(Palette.ink)
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, Space.md)
+        .padding(.top, Space.xs)
+    }
+
+    /// Faint outlined glyphs scattered over the blush background, as in the
+    /// reference. Decorative only.
+    private var watermarks: some View {
+        GeometryReader { proxy in
+            let w = proxy.size.width
+            ZStack {
+                Image(systemName: "play")
+                    .font(.system(size: 64, weight: .ultraLight))
+                    .rotationEffect(.degrees(-14))
+                    .position(x: w * 0.27, y: 150)
+                Image(systemName: "plus")
+                    .font(.system(size: 56, weight: .thin))
+                    .position(x: w * 0.76, y: 215)
+                Image(systemName: "play")
+                    .font(.system(size: 44, weight: .ultraLight))
+                    .rotationEffect(.degrees(10))
+                    .position(x: w * 0.10, y: 320)
+                Image(systemName: "circle")
+                    .font(.system(size: 48, weight: .thin))
+                    .position(x: w * 0.94, y: 375)
+            }
+            .foregroundStyle(Palette.flamingo.opacity(0.05))
+        }
+        .ignoresSafeArea()
+        .accessibilityHidden(true)
+    }
+
+    // MARK: - Avatars
+
+    /// Left and right circles tucked beneath the middle one, as the reference
+    /// overlaps them.
+    private var avatarCluster: some View {
+        ZStack {
+            avatar("welcome-avatar-1")
+                .offset(x: -59)
+            avatar("welcome-avatar-3")
+                .offset(x: 59)
+            avatar("welcome-avatar-2")
         }
         .accessibilityHidden(true)
     }
 
-    private var authButtons: some View {
-        VStack(spacing: Space.cardGap) {
-            AuthButton(
-                title: "Continue with Google",
-                isEnabled: hasConsented,
-                isLoading: session.signingInWith == .google
-            ) {
-                GoogleGlyph()
-            } action: {
-                session.signIn(with: .google, hasConsented: hasConsented)
-            }
-
-            AuthButton(
-                title: "Continue with Apple",
-                isEnabled: hasConsented,
-                isLoading: session.signingInWith == .apple
-            ) {
-                Image(systemName: "apple.logo")
-                    .font(.system(size: 22))
-                    .foregroundStyle(.black)
-            } action: {
-                session.signIn(with: .apple, hasConsented: hasConsented)
-            }
-
-            AuthButton(
-                title: "Continue as Guest",
-                isEnabled: hasConsented,
-                isLoading: session.signingInWith == .guest
-            ) {
-                Image(systemName: "person.fill")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(Palette.blue.opacity(0.75))
-            } action: {
-                session.signIn(with: .guest, hasConsented: hasConsented)
-            }
-        }
-        .padding(.horizontal, Space.gutter)
-        .accessibilityElement(children: .contain)
+    private func avatar(_ name: String) -> some View {
+        Image(name)
+            .resizable()
+            .scaledToFill()
+            .frame(width: 63, height: 63)
+            .clipShape(Circle())
+            .overlay(Circle().stroke(Color.white, lineWidth: 3))
+            .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
     }
+
 }
 
-/// Page indicator. The active dot is a sparkle rather than a circle, matching
-/// the reference.
+/// Page indicator. The active dot is a coral diamond, matching the reference.
 struct PageDots: View {
     var count: Int
     var activeIndex: Int
@@ -126,7 +194,10 @@ struct PageDots: View {
         HStack(spacing: Space.sm) {
             ForEach(0..<count, id: \.self) { index in
                 if index == activeIndex {
-                    SparkleMark(size: 14, color: Palette.blue)
+                    RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                        .fill(Palette.flamingo)
+                        .frame(width: 10, height: 10)
+                        .rotationEffect(.degrees(45))
                 } else {
                     Circle()
                         .fill(Palette.textTertiary.opacity(0.5))
@@ -139,6 +210,5 @@ struct PageDots: View {
 }
 
 #Preview {
-    WelcomeView()
-        .environmentObject(SessionStore(auth: MockAuthenticationService()))
+    WelcomeView(auth: MockAuthenticationService())
 }

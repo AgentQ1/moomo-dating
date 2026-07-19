@@ -1,7 +1,7 @@
 import XCTest
 @testable import Moomo
 
-/// Onboarding validation, resume-after-relaunch, guest flow, and completion.
+/// Onboarding validation, resume-after-relaunch, and completion.
 @MainActor
 final class OnboardingTests: XCTestCase {
 
@@ -14,10 +14,10 @@ final class OnboardingTests: XCTestCase {
         storage = OnboardingDraftStorage(defaults: defaults)
     }
 
-    private func makeUser(guest: Bool = false, id: String = "u1") -> User {
+    private func makeUser(id: String = "u1") -> User {
         User(
             id: id,
-            authProvider: guest ? .guest : .apple,
+            authProvider: .phone,
             consent: .now(),
             profile: Profile(),
             createdAt: Date(),
@@ -25,22 +25,30 @@ final class OnboardingTests: XCTestCase {
         )
     }
 
-    private func makeModel(guest: Bool = false, id: String = "u1") -> OnboardingModel {
-        OnboardingModel(user: makeUser(guest: guest, id: id), storage: storage)
+    private func makeModel(id: String = "u1") -> OnboardingModel {
+        OnboardingModel(user: makeUser(id: id), storage: storage)
+    }
+
+    /// Signs into the mock backend through the real phone flow — the only way
+    /// a session begins.
+    private func signInWithPhone(_ auth: MockAuthenticationService) async {
+        _ = try? await auth.sendCode(to: "+15550100200")
+        _ = try? await auth.signIn(
+            verificationID: MockAuthenticationService.mockVerificationID,
+            code: MockAuthenticationService.validVerificationCode,
+            consent: .now()
+        )
     }
 
     // MARK: - Step sets
 
-    func testGuestGetsShortenedFlowButKeepsTheAgeGate() {
-        let steps = OnboardingStep.steps(isGuest: true)
-        XCTAssertTrue(steps.contains(.dateOfBirth), "Guests are never exempt from the age gate")
+    func testFlowIncludesEveryStepForEveryone() {
+        // The guest short flow is gone with anonymous auth: one flow, and it
+        // always includes the age gate, photos, and safety.
+        let steps = OnboardingStep.allCases
+        XCTAssertTrue(steps.contains(.dateOfBirth))
+        XCTAssertTrue(steps.contains(.photos))
         XCTAssertTrue(steps.contains(.safety))
-        XCTAssertFalse(steps.contains(.photos))
-        XCTAssertFalse(steps.contains(.bio))
-    }
-
-    func testFullFlowIncludesEveryStep() {
-        XCTAssertEqual(OnboardingStep.steps(isGuest: false).count, OnboardingStep.allCases.count)
     }
 
     // MARK: - Validation
@@ -164,14 +172,14 @@ final class OnboardingTests: XCTestCase {
         let auth = MockAuthenticationService(latency: .milliseconds(1), store: userStore)
         let session = SessionStore(auth: auth)
 
-        session.signIn(with: .guest, hasConsented: true)
+        await signInWithPhone(auth)
         try? await Task.sleep(for: .milliseconds(300))
 
         guard let user = session.user else { return XCTFail("Expected a signed-in user") }
 
         let model = OnboardingModel(user: user, storage: storage)
         model.update { profile in
-            profile = .completeGuestProfile
+            profile = .completeFullProfile
         }
         model.setSafetyAcknowledged(true)
         model.jumpToStepForTesting(.review)
@@ -195,12 +203,12 @@ final class OnboardingTests: XCTestCase {
         let auth = MockAuthenticationService(latency: .milliseconds(1), store: userStore)
         let session = SessionStore(auth: auth)
 
-        session.signIn(with: .guest, hasConsented: true)
+        await signInWithPhone(auth)
         try? await Task.sleep(for: .milliseconds(300))
         guard let user = session.user else { return XCTFail("Expected a signed-in user") }
 
         let model = OnboardingModel(user: user, storage: storage)
-        model.update { $0 = .completeGuestProfile }
+        model.update { $0 = .completeFullProfile }
         model.setSafetyAcknowledged(true)
         model.jumpToStepForTesting(.review)
 
@@ -215,26 +223,25 @@ final class OnboardingTests: XCTestCase {
     // MARK: - Completion percentage
 
     func testCompletionPercentageRises() {
-        let empty = ProfileRequirements.completionPercentage(for: Profile(), isGuest: false)
-        let full = ProfileRequirements.completionPercentage(for: .completeFullProfile, isGuest: false)
+        let empty = ProfileRequirements.completionPercentage(for: Profile())
+        let full = ProfileRequirements.completionPercentage(for: .completeFullProfile)
         XCTAssertEqual(empty, 0)
         XCTAssertGreaterThan(full, empty)
         XCTAssertLessThanOrEqual(full, 100)
     }
 
-    func testMissingFieldsForGuestExcludePhotosAndLocation() {
-        let missing = ProfileRequirements.missingFields(for: .completeGuestProfile)
-        XCTAssertTrue(missing.isEmpty)
+    func testMissingFieldsRequirePhotosAndLocation() {
+        // A profile with only the identity basics is not enterable: photos
+        // and location are required for everyone.
+        let missing = ProfileRequirements.missingFields(in: .identityOnlyProfile)
+        XCTAssertTrue(missing.contains(.photos))
+        XCTAssertTrue(missing.contains(.location))
+
+        XCTAssertTrue(ProfileRequirements.missingFields(in: .completeFullProfile).isEmpty)
     }
 }
 
 // MARK: - Test seams
-
-private extension ProfileRequirements {
-    static func missingFields(for profile: Profile) -> [ProfileField] {
-        missingFields(in: profile, isGuest: true)
-    }
-}
 
 private extension OnboardingDraft {
     var displayNameForTesting: String { profile.displayName }

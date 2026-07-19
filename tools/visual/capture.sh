@@ -30,24 +30,32 @@ xcodebuild test \
   -destination "platform=iOS Simulator,name=$DEVICE" \
   -only-testing:MoomoUITests/OnboardingUITests/testCaptureWelcomeScreenshot \
   -only-testing:MoomoUITests/OnboardingUITests/testCaptureDiscoverScreenshot \
+  -only-testing:MoomoUITests/OnboardingUITests/testCaptureSpeedCallScreenshot \
   -derivedDataPath "$APP_DIR/build/DerivedData" \
   -resultBundlePath "$RESULT_BUNDLE" \
   >/dev/null 2>&1 || echo "    (some capture tests failed — extracting whatever was captured)"
 
 echo "==> Extracting attachments"
+# Export into a clean staging directory: xcresulttool does not refresh an
+# existing manifest.json, so exporting straight into actual/ leaves a stale
+# manifest that hides every capture after the first run.
+EXPORT_DIR="$ACTUAL_DIR/.export"
+rm -rf "$EXPORT_DIR"
+mkdir -p "$EXPORT_DIR"
 xcrun xcresulttool export attachments \
   --path "$RESULT_BUNDLE" \
-  --output-path "$ACTUAL_DIR" \
+  --output-path "$EXPORT_DIR" \
   >/dev/null 2>&1 || true
 
 # xcresulttool names attachments by test; normalise to <screen>.png so the
 # comparison script can pair them with the references.
-python3 - "$ACTUAL_DIR" <<'PY'
+python3 - "$EXPORT_DIR" "$ACTUAL_DIR" <<'PY'
 import json, shutil, sys
 from pathlib import Path
 
-out = Path(sys.argv[1])
-manifest = out / "manifest.json"
+src = Path(sys.argv[1])
+out = Path(sys.argv[2])
+manifest = src / "manifest.json"
 if not manifest.exists():
     sys.exit(0)
 
@@ -57,7 +65,7 @@ for entry in json.loads(manifest.read_text()):
         exported = attachment.get("exportedFileName")
         if not exported:
             continue
-        source = out / exported
+        source = src / exported
         if not source.exists():
             continue
         for screen in ("welcome", "discover", "speed-call", "call-ended", "match-chat", "profile"):
@@ -66,6 +74,7 @@ for entry in json.loads(manifest.read_text()):
                 print(f"    captured {screen}.png")
                 break
 PY
+rm -rf "$EXPORT_DIR"
 
 echo "==> Comparing against references"
 python3 "$ROOT/tools/visual/compare.py"

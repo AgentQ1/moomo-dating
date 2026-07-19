@@ -8,6 +8,13 @@ xcuserdata/
 # Firebase / secrets — never commit these
 GoogleService-Info.plist
 .env
+.env.*
+*.pem
+*.key
+*service-account*.json
+*serviceAccount*.json
+firebase-debug.log
+*-debug.log
 .firebase/
 functions/node_modules/
 node_modules/
@@ -15,3 +22,15 @@ node_modules/
 # Visual validation output
 tools/visual/actual/
 tools/visual/diff/
+tools/visual/output/
+
+# Generated test/result bundles
+*.xcresult
+
+# Cloud Functions build output
+backend/functions/lib/
+
+# Emulator logs
+backend/rules-tests/*.log
+backend/functions/*.log
+.claude/settings.local.json

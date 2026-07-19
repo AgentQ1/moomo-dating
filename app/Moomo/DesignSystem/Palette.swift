@@ -33,15 +33,24 @@ enum Palette {
     /// Dusty rose — the left figure of the M logo.
     static let rose = Color(hex: 0xD4818C)
 
+    /// Coral-pink of the welcome screen's "Verification" CTA, its legal links,
+    /// and the active pager dot. Sampled from the phone-auth welcome reference.
+    static let flamingo = Color(hex: 0xFA4B64)
+
     // MARK: - Backgrounds
 
-    /// Warm cream. Welcome/auth screen background.
+    /// Warm cream. Live speed-call background.
     static let cream = Color(hex: 0xF8F4F0)
+
+    /// Pale blush pink. Welcome / phone-verification backgrounds, sampled from
+    /// the phone-auth welcome reference.
+    static let blush = Color(hex: 0xFCF4F5)
 
     /// Cool off-white. Discover, Decision, Match, Profile backgrounds.
     static let canvas = Color(hex: 0xF7F8FA)
 
-    /// Dark navy. Speed-call screen background.
+    /// Dark navy. Matchmaking search/connect background, and what the
+    /// speed-call video card shows before frames arrive.
     static let night = Color(hex: 0x0A1229)
 
     /// Slightly lifted navy for call-screen controls.
@@ -63,7 +72,13 @@ enum Palette {
     static let online = Color(hex: 0x34C759)
     static let verifiedGreenBG = Color(hex: 0xE7F7EC)
     static let verifiedGreenFG = Color(hex: 0x1E8E3E)
+    /// Olive-green seal beside the name on the speed-call identity overlay.
+    static let verifiedOlive = Color(hex: 0x7E8A50)
     static let notificationDot = Color(hex: 0xFF3B30)
+
+    /// Mascot pink — the ghost sticker on the call screen and the Video Match
+    /// tile mascot.
+    static let mascotPink = Color(hex: 0xF9A8D4)
 
     // MARK: - Tints
 
@@ -114,12 +129,16 @@ enum Palette {
         endPoint: .bottomTrailing
     )
 
-    /// Blue glow behind the remote video on the call screen.
-    static let callGlow = RadialGradient(
-        colors: [Color(hex: 0x2C57C9).opacity(0.55), Color.clear],
-        center: .center,
-        startRadius: 40,
-        endRadius: 260
+    /// Legibility scrim over the bottom of the speed-call video, under the
+    /// identity overlay. The reference's photo darkens toward the base; this
+    /// guarantees the same on any video frame.
+    static let callScrim = LinearGradient(
+        stops: [
+            .init(color: .clear, location: 0.55),
+            .init(color: Color.black.opacity(0.45), location: 1)
+        ],
+        startPoint: .top,
+        endPoint: .bottom
     )
 }
 

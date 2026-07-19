@@ -1,8 +1,8 @@
 import XCTest
 @testable import Moomo
 
-/// Consent gating, auth failures, cancellation, retry, guest linking, and the
-/// returning-user routing rule.
+/// The phone OTP flow: consent gating, sending and verifying codes, failures,
+/// cancellation, and the returning-user routing rule.
 @MainActor
 final class AuthenticationTests: XCTestCase {
 
@@ -19,7 +19,7 @@ final class AuthenticationTests: XCTestCase {
         defaults = UserDefaults(suiteName: suite)!
         store = MockUserStore(defaults: defaults)
         auth = MockAuthenticationService(latency: .milliseconds(1), store: store)
-        session = SessionStore(auth: auth, credentials: MockCredentialProvider())
+        session = SessionStore(auth: auth)
         await settle()
     }
 
@@ -37,48 +37,125 @@ final class AuthenticationTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(ms))
     }
 
+    /// Drives the whole mock phone flow: send SMS, type the valid code, sign
+    /// in.
+    @discardableResult
+    private func completePhoneFlow(
+        number: String = "5550100200"
+    ) async -> PhoneAuthModel {
+        let model = PhoneAuthModel(auth: auth)
+        model.nationalNumber = number
+        model.sendCode(hasConsented: true)
+        await settle(150)
+        model.code = MockAuthenticationService.validVerificationCode
+        model.verifyCode()
+        await settle(300)
+        return model
+    }
+
     // MARK: - Consent
 
-    func testSignInWithoutConsentIsRefused() async {
-        session.signIn(with: .guest, hasConsented: false)
+    func testSendCodeWithoutConsentIsRefused() async {
+        let model = PhoneAuthModel(auth: auth)
+        model.nationalNumber = "5550100200"
+        model.sendCode(hasConsented: false)
         await settle()
 
-        XCTAssertEqual(session.error, .consentRequired)
-        XCTAssertNil(session.user, "No account may be created without consent")
-        XCTAssertEqual(session.route, .welcome)
+        XCTAssertEqual(model.error, .consentRequired)
+        XCTAssertEqual(model.stage, .enteringNumber, "No SMS may go out without consent")
+        XCTAssertNil(session.user)
     }
 
-    func testSignInWithConsentCreatesAccountAndRecordsConsent() async throws {
-        session.signIn(with: .guest, hasConsented: true)
+    // MARK: - Sign in
+
+    func testPhoneSignInCreatesAccountAndRecordsConsent() async throws {
+        await completePhoneFlow()
+
+        let user = try XCTUnwrap(session.user)
+        XCTAssertEqual(user.authProvider, .phone)
+        XCTAssertEqual(user.phoneNumber, "+15550100200")
+        XCTAssertEqual(user.consent?.documentVersion, ConsentRecord.currentVersion)
+        XCTAssertEqual(session.route, .onboarding, "A fresh account goes straight to onboarding")
+    }
+
+    func testWrongCodeIsRefusedAndClearedForRetyping() async {
+        let model = PhoneAuthModel(auth: auth)
+        model.nationalNumber = "5550100200"
+        model.sendCode(hasConsented: true)
+        await settle(150)
+
+        model.code = "000000"
+        model.verifyCode()
         await settle(300)
 
-        XCTAssertNil(session.error)
-        let user = try XCTUnwrap(session.user)
-        XCTAssertEqual(user.authProvider, .guest)
-        XCTAssertEqual(user.consent?.documentVersion, ConsentRecord.currentVersion)
-        XCTAssertNotNil(user.consent?.acceptedAt)
+        XCTAssertEqual(model.error, .invalidVerificationCode)
+        XCTAssertEqual(model.stage, .codeSent, "A wrong code keeps the OTP screen up")
+        XCTAssertEqual(model.code, "", "The wrong code is cleared for retyping")
+        XCTAssertNil(session.user, "A wrong code must never create an account")
     }
 
-    /// Consent must be enforced by the store, not only by disabling buttons.
-    func testConsentIsEnforcedBelowTheUILayer() async {
-        session.signIn(with: .apple, hasConsented: false)
-        await settle()
-        XCTAssertNil(auth.currentUser)
+    func testRightCodeAfterWrongCodeRecoversTheFlow() async throws {
+        let model = PhoneAuthModel(auth: auth)
+        model.nationalNumber = "5550100200"
+        model.sendCode(hasConsented: true)
+        await settle(150)
+
+        model.code = "000000"
+        model.verifyCode()
+        await settle(300)
+        XCTAssertNil(session.user)
+
+        model.code = MockAuthenticationService.validVerificationCode
+        model.verifyCode()
+        await settle(300)
+
+        XCTAssertNil(model.error)
+        XCTAssertNotNil(session.user, "The correct code must still work after a wrong one")
+    }
+
+    func testMalformedNumberNeverSendsAnSMS() async {
+        let model = PhoneAuthModel(auth: auth)
+        model.nationalNumber = "12"
+        model.sendCode(hasConsented: true)
+        await settle(150)
+
+        XCTAssertEqual(model.error, .invalidPhoneNumber)
+        XCTAssertEqual(model.stage, .enteringNumber)
+    }
+
+    /// A verification session is single-use: once consumed (or never created),
+    /// signing in with it reports expiry, and only a fresh SMS continues.
+    func testVerificationSessionIsSingleUse() async throws {
+        _ = try await auth.sendCode(to: "+15550100200")
+        _ = try await auth.signIn(
+            verificationID: MockAuthenticationService.mockVerificationID,
+            code: MockAuthenticationService.validVerificationCode,
+            consent: .now()
+        )
+
+        do {
+            _ = try await auth.signIn(
+                verificationID: MockAuthenticationService.mockVerificationID,
+                code: MockAuthenticationService.validVerificationCode,
+                consent: .now()
+            )
+            XCTFail("A consumed verification session must not sign in twice")
+        } catch let error as AuthError {
+            XCTAssertEqual(error, .verificationExpired)
+        }
     }
 
     // MARK: - Routing
 
     func testNewUserRoutesToOnboardingNotMain() async {
-        session.signIn(with: .guest, hasConsented: true)
-        await settle(300)
+        await completePhoneFlow()
         XCTAssertEqual(session.route, .onboarding)
     }
 
     func testCompletedProfileRoutesToMain() async {
-        session.signIn(with: .guest, hasConsented: true)
-        await settle(300)
+        await completePhoneFlow()
 
-        await session.updateProfile(.completeGuestProfile)
+        await session.updateProfile(.completeFullProfile)
         await session.completeOnboarding()
         await settle(200)
 
@@ -88,10 +165,9 @@ final class AuthenticationTests: XCTestCase {
     /// Onboarding "completed" is not sufficient on its own — a profile that
     /// has lost a required field must go back, not into a broken app.
     func testCompletedOnboardingWithMissingFieldsRoutesToOnboarding() async {
-        session.signIn(with: .guest, hasConsented: true)
-        await settle(300)
+        await completePhoneFlow()
 
-        var broken = Profile.completeGuestProfile
+        var broken = Profile.completeFullProfile
         broken.displayName = ""
         await session.updateProfile(broken)
         await session.completeOnboarding()
@@ -104,120 +180,238 @@ final class AuthenticationTests: XCTestCase {
     func testStaleConsentVersionIsNotValidProfileState() {
         let user = User(
             id: "u1",
-            authProvider: .apple,
+            authProvider: .phone,
             consent: ConsentRecord(acceptedAt: Date(), documentVersion: "1999-01-01"),
-            profile: .completeGuestProfile,
+            profile: .completeFullProfile,
             createdAt: Date(),
-            onboardingCompletedAt: Date()
+            onboardingCompletedAt: Date(),
+            phoneNumber: "+15550100200"
         )
         XCTAssertFalse(user.hasValidProfileState)
     }
 
+    // MARK: - Consent-less accounts must not soft-lock
+
+    /// Regression. An account whose document was created without consent — which
+    /// the auth-state listener does on every restored session, because it has no
+    /// consent to record and must not invent one — used to route to
+    /// `.onboarding`. Onboarding has no consent step, so the user could complete
+    /// every field, tap "Start meeting people", write it all to Firestore, and
+    /// watch the screen not change, forever, with no error.
+    ///
+    /// It must route to `.welcome`, which is the only place consent is given.
+    func testMissingConsentRoutesToWelcomeNotOnboarding() {
+        let user = User(
+            id: "u1",
+            authProvider: .phone,
+            consent: nil,
+            profile: .completeFullProfile,
+            createdAt: Date(),
+            onboardingCompletedAt: Date(),
+            phoneNumber: "+15550100200"
+        )
+        XCTAssertFalse(user.hasRecordedCurrentConsent)
+        XCTAssertFalse(
+            user.hasValidProfileState,
+            "No consent means the app is not enterable, however complete the profile is"
+        )
+    }
+
+    /// The same dead end, reached through the stale-policy door rather than the
+    /// missing-consent one.
+    func testStaleConsentIsNotTreatedAsRecordedConsent() {
+        let user = User(
+            id: "u1",
+            authProvider: .phone,
+            consent: ConsentRecord(acceptedAt: Date(), documentVersion: "1999-01-01"),
+            profile: .completeFullProfile,
+            createdAt: Date(),
+            onboardingCompletedAt: Date(),
+            phoneNumber: "+15550100200"
+        )
+        XCTAssertFalse(user.hasRecordedCurrentConsent)
+    }
+
+    /// Current consent is what distinguishes the two.
+    func testCurrentConsentIsRecordedConsent() {
+        let user = User(
+            id: "u1",
+            authProvider: .phone,
+            consent: .now(),
+            profile: .completeFullProfile,
+            createdAt: Date(),
+            onboardingCompletedAt: Date(),
+            phoneNumber: "+15550100200"
+        )
+        XCTAssertTrue(user.hasRecordedCurrentConsent)
+        XCTAssertTrue(user.hasValidProfileState)
+    }
+
+    // MARK: - Returning users
+
     func testReturningUserKeepsSameAccount() async {
-        session.signIn(with: .guest, hasConsented: true)
-        await settle(300)
+        await completePhoneFlow()
         let firstID = session.user?.id
 
         session.signOut()
         await settle(500)
         XCTAssertEqual(session.route, .welcome)
 
-        session.signIn(with: .guest, hasConsented: true)
-        await settle(300)
+        await completePhoneFlow()
 
-        XCTAssertEqual(session.user?.id, firstID, "Signing back in must return the same account")
+        XCTAssertEqual(session.user?.id, firstID, "The same number must return the same account")
+    }
+
+    func testDifferentNumberGetsADifferentAccount() async {
+        await completePhoneFlow(number: "5550100200")
+        let firstID = session.user?.id
+        session.signOut()
+        await settle(500)
+
+        await completePhoneFlow(number: "5559998877")
+
+        XCTAssertNotEqual(session.user?.id, firstID, "Each number owns its own account")
+    }
+
+    func testReturningUserResumesPartialOnboarding() async {
+        await completePhoneFlow()
+        await session.updateProfile(.identityOnlyProfile)
+        await settle(150)
+
+        session.signOut()
+        await settle(500)
+        await completePhoneFlow()
+
+        XCTAssertEqual(
+            session.user?.profile.displayName,
+            Profile.identityOnlyProfile.displayName,
+            "A half-finished profile must survive sign-out and sign-in"
+        )
+        XCTAssertEqual(session.route, .onboarding)
     }
 
     // MARK: - Failures
 
-    func testNetworkFailureSurfacesRetryableError() async {
+    func testNetworkFailureWhileSendingSMSStaysOnTheNumber() async {
         auth.nextFailure = .network
-        session.signIn(with: .guest, hasConsented: true)
-        await settle(300)
+        let model = PhoneAuthModel(auth: auth)
+        model.nationalNumber = "5550100200"
+        model.sendCode(hasConsented: true)
+        await settle(150)
 
-        XCTAssertEqual(session.error, .network)
-        XCTAssertTrue(session.error?.isRetryable ?? false)
+        XCTAssertEqual(model.error, .network)
+        XCTAssertEqual(model.stage, .enteringNumber, "A failed send returns to the number entry")
+    }
+
+    func testFailedSMSSendSurfacesTheError() async {
+        auth.nextFailure = .smsSendFailed
+        let model = PhoneAuthModel(auth: auth)
+        model.nationalNumber = "5550100200"
+        model.sendCode(hasConsented: true)
+        await settle(150)
+
+        XCTAssertEqual(model.error, .smsSendFailed)
+        XCTAssertEqual(model.stage, .enteringNumber)
         XCTAssertNil(session.user)
     }
 
-    func testRetryAfterFailureSucceeds() async {
-        auth.nextFailure = .network
-        session.signIn(with: .guest, hasConsented: true)
-        await settle(300)
-        XCTAssertNotNil(session.error)
+    func testTooManyAttemptsSurfacesInline() async {
+        auth.nextFailure = .tooManyAttempts
+        let model = PhoneAuthModel(auth: auth)
+        model.nationalNumber = "5550100200"
+        model.sendCode(hasConsented: true)
+        await settle(150)
 
-        session.retry(provider: .guest)
+        XCTAssertEqual(model.error, .tooManyAttempts)
+        XCTAssertEqual(model.stage, .enteringNumber)
+    }
+
+    func testExpiredVerificationKeepsOTPScreenForResend() async {
+        let model = PhoneAuthModel(auth: auth)
+        model.nationalNumber = "5550100200"
+        model.sendCode(hasConsented: true)
+        await settle(150)
+
+        auth.nextFailure = .verificationExpired
+        model.code = MockAuthenticationService.validVerificationCode
+        model.verifyCode()
         await settle(300)
 
-        XCTAssertNil(session.error)
-        XCTAssertNotNil(session.user)
+        XCTAssertEqual(model.error, .verificationExpired)
+        XCTAssertEqual(model.stage, .codeSent, "Expiry stays on the OTP screen; resend is the way forward")
+        XCTAssertNil(session.user)
     }
 
     /// Backing out is a choice, not a failure. Showing an alert for it is a bug.
     func testCancellationDoesNotSurfaceAnError() async {
         auth.nextFailure = .cancelled
-        session.signIn(with: .guest, hasConsented: true)
-        await settle(300)
+        let model = PhoneAuthModel(auth: auth)
+        model.nationalNumber = "5550100200"
+        model.sendCode(hasConsented: true)
+        await settle(150)
 
-        XCTAssertNil(session.error, "Cancelling must never raise an alert")
+        XCTAssertNil(model.error, "Cancelling must never raise an alert")
         XCTAssertNil(session.user)
     }
 
-    func testDisabledAccountIsNotRetryable() {
-        XCTAssertFalse(AuthError.accountDisabled.isRetryable)
-        XCTAssertFalse(AuthError.cancelled.isRetryable)
-        XCTAssertTrue(AuthError.network.isRetryable)
-    }
-
-    func testConcurrentSignInAttemptsAreIgnored() async {
-        session.signIn(with: .guest, hasConsented: true)
-        session.signIn(with: .apple, hasConsented: true)
-        await settle(400)
-
-        // The second attempt must not have displaced the first.
-        XCTAssertEqual(session.user?.authProvider, .guest)
-    }
-
-    // MARK: - Guest linking
-
-    func testLinkingGuestKeepsUidAndProfile() async {
-        session.signIn(with: .guest, hasConsented: true)
-        await settle(300)
-
-        await session.updateProfile(.completeGuestProfile)
+    func testBackFromOTPDropsTheVerification() async {
+        let model = PhoneAuthModel(auth: auth)
+        model.nationalNumber = "5550100200"
+        model.sendCode(hasConsented: true)
         await settle(150)
+        XCTAssertEqual(model.stage, .codeSent)
 
-        let guestID = session.user?.id
-        await session.linkGuestAccount(with: .apple)
+        model.editNumber()
+
+        XCTAssertEqual(model.stage, .enteringNumber)
+        XCTAssertEqual(model.code, "")
+
+        // The dropped id must not verify: typing a code without a fresh send
+        // is refused before any backend call.
+        model.code = MockAuthenticationService.validVerificationCode
+        model.verifyCode()
         await settle(300)
-
-        XCTAssertEqual(session.user?.id, guestID, "Linking must keep the same uid")
-        XCTAssertEqual(session.user?.authProvider, .apple)
-        XCTAssertEqual(session.user?.profile.displayName, Profile.completeGuestProfile.displayName)
-        XCTAssertFalse(session.user?.isGuest ?? true)
+        XCTAssertNil(session.user, "An abandoned verification must not sign in")
     }
 
-    func testLinkingToAnAlreadyUsedProviderFails() async {
-        // An Apple account already exists.
-        session.signIn(with: .apple, hasConsented: true)
-        await settle(300)
-        session.signOut()
-        await settle(500)
+    // MARK: - Account deletion
 
-        session.signIn(with: .guest, hasConsented: true)
-        await settle(300)
+    func testDeleteAccountSignsOutAndDestroysTheAccount() async {
+        await completePhoneFlow()
+        await session.updateProfile(.completeFullProfile)
+        await settle(150)
+        let deletedID = session.user?.id
 
-        await session.linkGuestAccount(with: .apple)
+        await session.deleteAccount()
         await settle(300)
 
-        XCTAssertEqual(session.error, .credentialAlreadyInUse)
-        XCTAssertTrue(session.user?.isGuest ?? false, "Failed link must leave the guest intact")
+        XCTAssertNil(session.error)
+        XCTAssertNil(session.user, "Deletion must end the session")
+        XCTAssertEqual(session.route, .welcome)
+
+        // Unlike sign-out, the account must be gone: signing in again creates
+        // a fresh profile rather than restoring the deleted one.
+        await completePhoneFlow()
+        XCTAssertNotEqual(session.user?.id, deletedID, "Deletion must not be a sign-out")
+        XCTAssertEqual(session.user?.profile.displayName, "", "The old profile must not come back")
+    }
+
+    func testDeleteAccountFailureKeepsTheSession() async {
+        await completePhoneFlow()
+
+        auth.nextFailure = .network
+        await session.deleteAccount()
+        await settle(200)
+
+        XCTAssertEqual(session.error, .network)
+        XCTAssertNotNil(session.user, "A failed deletion must leave the session intact")
     }
 }
 
 extension Profile {
-    /// Satisfies the guest requirements: name, age, gender, interested-in.
-    static var completeGuestProfile: Profile {
+    /// Satisfies the basic identity requirements: name, age, gender,
+    /// interested-in. Not enough for a full account — no location or photos.
+    static var identityOnlyProfile: Profile {
         var profile = Profile()
         profile.displayName = "Sam"
         profile.dateOfBirth = Calendar.current.date(byAdding: .year, value: -24, to: Date())
@@ -228,9 +422,15 @@ extension Profile {
 
     /// Satisfies the full requirements, including location and photos.
     static var completeFullProfile: Profile {
-        var profile = completeGuestProfile
+        var profile = identityOnlyProfile
         profile.location = CityLocation(city: "New York", region: "NY", countryCode: "US")
-        profile.photos = [ProfilePhoto(id: "p1", remotePath: nil, order: 0)]
+        profile.photos = [
+            ProfilePhoto(
+                id: "p1",
+                remotePath: StoragePath.photo(uid: "test-uid", photoId: "p1"),
+                order: 0
+            )
+        ]
         profile.bio = "Coffee and terrible puns."
         profile.interests = ["Coffee", "Films", "Hiking"]
         return profile
