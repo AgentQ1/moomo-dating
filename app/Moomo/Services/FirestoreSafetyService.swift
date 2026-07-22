@@ -115,6 +115,16 @@ final class FirestoreSafetyService: SafetyService, @unchecked Sendable {
 
     func reports() async -> [Report] { sessionReports.value }
 
+    func unmatch(_ candidate: DiscoveryCandidate, reason: UnmatchReason) async throws {
+        // A callable, like blockUser, because an unmatch must always cascade:
+        // match and conversation die together server-side, and the private
+        // reason lands where only moderation can read it.
+        _ = try await FunctionsClient.call(.unmatchUser, [
+            "otherUserId": candidate.id,
+            "reason": reason.rawValue
+        ])
+    }
+
     private func blockedCollection() -> CollectionReference {
         db.collection(FirestorePath.blocks).document(uid)
             .collection(FirestorePath.blocked)

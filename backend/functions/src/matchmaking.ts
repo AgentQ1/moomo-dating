@@ -7,9 +7,46 @@
  *
  * `createCallSession` is deliberately internal, not a callable: a client that
  * could create call sessions could forge call history with anyone.
+ *
+ * Scale design (production-readiness audit P1-2). The original queue was a
+ * single FIFO: every joiner's transaction read the same ten oldest entries,
+ * so concurrent joins serialized on one queue head and retried each other
+ * into the ground. Three changes remove that:
+ *
+ *  1. SHARDED WAITING POOL. Each waiting entry carries a random
+ *     `shard` (0..QUEUE_SHARD_COUNT-1). A joiner scans shards starting from a
+ *     random one and stops as soon as it has a candidate window, so
+ *     concurrent joiners mostly read DIFFERENT documents and their
+ *     transactions stop conflicting. With a sparse queue the scan falls
+ *     through every shard and behaves exactly like the old single queue —
+ *     contention relief scales up with load, correctness never depends on it.
+ *     Fairness becomes approximate FIFO (oldest-first within the gathered
+ *     window); strict global FIFO is exactly the hotspot being removed.
+ *
+ *  2. PROFILE READS OUTSIDE THE TRANSACTION. Compatibility/boost data comes
+ *     from `publicProfiles`, which every client heartbeats. Reading those
+ *     documents transactionally put them in the read-set, so ANY candidate's
+ *     presence heartbeat aborted the pairing transaction — a hidden
+ *     contention multiplier. Profiles are now read non-transactionally
+ *     (staleness of seconds is harmless for preferences/boosts); the
+ *     transaction's read-set is queue entries and block documents only.
+ *     Block checks deliberately STAY transactional — "blocked pairs are
+ *     never paired" is a safety invariant and must serialize with blockUser.
+ *
+ *  3. NO PER-REQUEST SWEEP. Stale-entry hygiene moved to the scheduled
+ *     `sweepMatchmakingQueue` (every minute); joins and leaves no longer run
+ *     a collection-scan transaction that contended with pairing. Pairing
+ *     already filters stale entries by TTL, so hygiene needs no join-time
+ *     hook for correctness.
+ *
+ * Retries are bounded (maxAttempts: 5) and every attempt beyond the first is
+ * logged as `matchmaking_txn_retry` — the observability plan alerts when the
+ * retry rate climbs (contention onset).
  */
 import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import { Timestamp } from "firebase-admin/firestore";
+import { callable, scheduled } from "./options";
 import {
   db,
   requireAuth,
@@ -21,7 +58,16 @@ import {
   CallMode,
   SPEED_CALL_SECONDS,
   QUEUE_ENTRY_TTL_MS,
+  activityBucketFloor,
 } from "./shared";
+import {
+  PublicProfile,
+  isMutuallyCompatible,
+  isBoosted,
+} from "./compatibility";
+import { enforceRateLimit } from "./ratelimit";
+import { requireEnabled } from "./runtime";
+import { logEvent } from "./observability";
 
 interface PairedSession {
   sessionId: string;
@@ -31,44 +77,19 @@ interface PairedSession {
   participants: Record<string, ParticipantSummary>;
 }
 
-type PublicProfile = FirebaseFirestore.DocumentData | undefined;
-
 /**
- * Whether `profile`'s stated preferences accept someone of `gender`.
- *
- * Mirrors `MatchPreferences.wants` in app/Moomo/Models/MatchPreferences.swift
- * — the two tables must stay identical, or Discover advertises people the
- * queue refuses to pair:
- *  - empty/missing preferences read as "everyone" (pre-preference accounts
- *    must keep working);
- *  - `everyone` accepts any gender, including non-binary/other/unknown;
- *  - `women`/`men` accept exactly `woman`/`man`; non-binary, other, and
- *    unknown genders are matched only by "everyone".
+ * How many shards the waiting pool spreads across. Read per call so the
+ * emulator tests can pin it (1 = the old deterministic FIFO); production
+ * defaults to 8 — at the audit's Viral rate (~200 joins/s) that keeps
+ * per-shard contention near the comfortable single-digit range.
  */
-function wantsGender(profile: PublicProfile, gender: string | null): boolean {
-  const preferences = Array.isArray(profile?.interestedIn)
-    ? (profile.interestedIn as unknown[]).filter((p) => typeof p === "string")
-    : [];
-  if (preferences.length === 0 || preferences.includes("everyone")) return true;
-  if (gender === "woman") return preferences.includes("women");
-  if (gender === "man") return preferences.includes("men");
-  return false;
+function shardCount(): number {
+  const raw = Number(process.env.QUEUE_SHARD_COUNT);
+  return Number.isInteger(raw) && raw >= 1 && raw <= 64 ? raw : 8;
 }
 
-function genderOf(profile: PublicProfile): string | null {
-  return typeof profile?.gender === "string" ? profile.gender : null;
-}
-
-/** Pair only people who would BOTH choose to meet the other. */
-function isMutuallyCompatible(a: PublicProfile, b: PublicProfile): boolean {
-  return wantsGender(a, genderOf(b)) && wantsGender(b, genderOf(a));
-}
-
-/** An active boost at `now` — what "front of the matchmaking queue" means. */
-function isBoosted(profile: PublicProfile, now: Timestamp): boolean {
-  const until = profile?.boostedUntil;
-  return until instanceof Timestamp && until.toMillis() > now.toMillis();
-}
+/** Candidate window per join — same breadth as the old FIFO head. */
+const CANDIDATE_WINDOW = 10;
 
 /**
  * Creates the server-owned call session and retires both queue entries.
@@ -122,7 +143,7 @@ function createCallSession(
   };
 }
 
-export const joinMatchmakingQueue = onCall(async (request) => {
+export const joinMatchmakingQueue = onCall(callable(20), async (request) => {
   const uid = requireAuth(request);
   const mode = requireString(request.data?.mode, "mode") as CallMode;
   if (!CALL_MODES.includes(mode)) {
@@ -135,121 +156,212 @@ export const joinMatchmakingQueue = onCall(async (request) => {
       ? (request.data.preferredPeerId as string)
       : null;
 
-  // Housekeeping on the way in: a join is the moment stale state hurts most
-  // (someone is looking at Discover and about to wait), and running it here
-  // means the queue heals even if nobody ever leaves cleanly.
-  await sweepStaleQueueEntries();
+  await requireEnabled("joinMatchmakingQueue", "matchmakingEnabled");
+  await enforceRateLimit(uid, "joinMatchmakingQueue");
 
-  return db().runTransaction(async (tx) => {
-    const now = Timestamp.now();
-    const staleBefore = Timestamp.fromMillis(now.toMillis() - QUEUE_ENTRY_TTL_MS);
+  let attempts = 0;
+  const result = await db().runTransaction(
+    async (tx) => {
+      attempts += 1;
+      const now = Timestamp.now();
+      const staleBefore = Timestamp.fromMillis(now.toMillis() - QUEUE_ENTRY_TTL_MS);
 
-    // -- Reads first (Admin transactions require all reads before writes) --
+      // -- Reads first (Admin transactions require all reads before writes) --
 
-    // The waiting pool, oldest first, same mode. A small page is enough: we
-    // only need one usable partner.
-    const waitingSnap = await tx.get(
-      db()
-        .collection("matchmakingQueue")
-        .where("status", "==", "waiting")
-        .where("mode", "==", mode)
-        .orderBy("createdAt", "asc")
-        .limit(10)
-    );
+      // Idempotency: a duplicate join (client retry after a network timeout)
+      // must return the session the first join already created, not enqueue
+      // over it and orphan the peer.
+      const myEntry = await tx.get(db().collection("matchmakingQueue").doc(uid));
+      if (myEntry.exists && myEntry.get("status") === "matched") {
+        const existingSessionId = myEntry.get("sessionId") as string | undefined;
+        if (existingSessionId) {
+          const existingSession = await tx.get(
+            db().collection("callSessions").doc(existingSessionId)
+          );
+          // Mode must match: a duplicate of the SAME request returns the
+          // same session, but a video join must never be handed a live
+          // voice session (the client labels the call with the mode it
+          // asked for).
+          if (
+            existingSession.exists &&
+            existingSession.get("status") === "active" &&
+            existingSession.get("mode") === mode
+          ) {
+            return {
+              status: "matched" as const,
+              session: {
+                sessionId: existingSessionId,
+                mode: (existingSession.get("mode") as CallMode) ?? mode,
+                startedAtMillis: (existingSession.get("startedAt") as Timestamp).toMillis(),
+                maxDurationSeconds:
+                  (existingSession.get("maxDurationSeconds") as number) ??
+                  SPEED_CALL_SECONDS,
+                participants: (existingSession.get("participants") ??
+                  {}) as Record<string, ParticipantSummary>,
+              },
+              rejoined: true,
+            };
+          }
+        }
+      }
 
-    // "Talk to Him": the featured person is asked first — but only if they
-    // are genuinely waiting. Nothing is simulated on their behalf.
-    const preferredCandidates: string[] = [];
-    if (preferredPeerId) {
-      const preferredEntry = await tx.get(
-        db().collection("matchmakingQueue").doc(preferredPeerId)
+      // The waiting pool, shard by shard from a random start, oldest first
+      // within each shard. Stop as soon as the window is full: under load
+      // the first shard fills it and the read-set stays one shard wide.
+      const shards = shardCount();
+      const startShard = Math.floor(Math.random() * shards);
+      type QueueEntry = FirebaseFirestore.QueryDocumentSnapshot;
+      const windowEntries: QueueEntry[] = [];
+      let shardsScanned = 0;
+      for (let offset = 0; offset < shards; offset += 1) {
+        const shard = (startShard + offset) % shards;
+        const shardSnap = await tx.get(
+          db()
+            .collection("matchmakingQueue")
+            .where("status", "==", "waiting")
+            .where("mode", "==", mode)
+            .where("shard", "==", shard)
+            // The TTL bound lives IN the query: dead-client entries (past
+            // the TTL, not yet swept) must not fill the limited window and
+            // hide the fresh waiters sorted behind them.
+            .where("createdAt", ">=", staleBefore)
+            .orderBy("createdAt", "asc")
+            .limit(CANDIDATE_WINDOW)
+        );
+        shardsScanned += 1;
+        windowEntries.push(...shardSnap.docs);
+        if (windowEntries.length >= CANDIDATE_WINDOW) break;
+      }
+
+      // "Talk to Him": the featured person is asked first — but only if they
+      // are genuinely waiting. Nothing is simulated on their behalf. A direct
+      // document read, so sharding never hides the invited person.
+      const preferredCandidates: string[] = [];
+      if (preferredPeerId) {
+        const preferredEntry = await tx.get(
+          db().collection("matchmakingQueue").doc(preferredPeerId)
+        );
+        if (
+          preferredEntry.exists &&
+          preferredEntry.get("status") === "waiting" &&
+          preferredEntry.get("mode") === mode &&
+          (preferredEntry.get("createdAt") as Timestamp) >= staleBefore
+        ) {
+          preferredCandidates.push(preferredPeerId);
+        }
+      }
+      const fifoCandidates: string[] = [];
+      // Oldest-first across the gathered window, whatever shard order the
+      // scan happened to visit — keeps waiting time roughly fair.
+      const orderedEntries = [...windowEntries].sort(
+        (a, b) =>
+          (a.get("createdAt") as Timestamp).toMillis() -
+          (b.get("createdAt") as Timestamp).toMillis()
       );
-      if (
-        preferredEntry.exists &&
-        preferredEntry.get("status") === "waiting" &&
-        preferredEntry.get("mode") === mode &&
-        (preferredEntry.get("createdAt") as Timestamp) >= staleBefore
-      ) {
-        preferredCandidates.push(preferredPeerId);
+      for (const entry of orderedEntries) {
+        const candidate = entry.get("uid") as string;
+        if (candidate === uid || preferredCandidates.includes(candidate)) continue;
+        if ((entry.get("createdAt") as Timestamp) < staleBefore) continue;
+        fifoCandidates.push(candidate);
       }
-    }
-    const fifoCandidates: string[] = [];
-    for (const entry of waitingSnap.docs) {
-      const candidate = entry.get("uid") as string;
-      if (candidate === uid || preferredCandidates.includes(candidate)) continue;
-      if ((entry.get("createdAt") as Timestamp) < staleBefore) continue;
-      fifoCandidates.push(candidate);
-    }
 
-    // Public projections for the joiner and every candidate, read inside the
-    // transaction: compatibility comes from gender + interestedIn, boost
-    // ranking from boostedUntil, and the participant summaries from the rest.
-    const profileIds = [uid, ...preferredCandidates, ...fifoCandidates];
-    const profileSnaps = await Promise.all(
-      profileIds.map((id) => tx.get(db().collection("publicProfiles").doc(id)))
-    );
-    const profiles = new Map<string, PublicProfile>(
-      profileIds.map((id, index) => [id, profileSnaps[index].data()])
-    );
-    const mine = profiles.get(uid);
+      // Public projections for the joiner and every candidate — deliberately
+      // NON-transactional reads (see the header): compatibility comes from
+      // gender + interestedIn, boost ranking from boostedUntil, and the
+      // participant summaries from the rest. Seconds-stale is harmless here,
+      // and keeping these out of the read-set stops every candidate's
+      // presence heartbeat from aborting this transaction.
+      const profileIds = [uid, ...preferredCandidates, ...fifoCandidates];
+      const profileSnaps = await db().getAll(
+        ...profileIds.map((id) => db().collection("publicProfiles").doc(id))
+      );
+      const profiles = new Map<string, PublicProfile>(
+        profileIds.map((id, index) => [id, profileSnaps[index].data()])
+      );
+      const mine = profiles.get(uid);
 
-    // Ranking: an explicit "Talk to Him" invitation first, then waiting users
-    // with an ACTIVE boost (what the boost screen promises), then everyone
-    // else — both groups oldest-first, as the query delivered them.
-    const rankedCandidates = [
-      ...preferredCandidates,
-      ...fifoCandidates.filter((id) => isBoosted(profiles.get(id), now)),
-      ...fifoCandidates.filter((id) => !isBoosted(profiles.get(id), now)),
-    ];
+      // Ranking: an explicit "Talk to Him" invitation first, then waiting
+      // users with an ACTIVE boost (what the boost screen promises), then
+      // everyone else — both groups oldest-first.
+      const rankedCandidates = [
+        ...preferredCandidates,
+        ...fifoCandidates.filter((id) => isBoosted(profiles.get(id), now)),
+        ...fifoCandidates.filter((id) => !isBoosted(profiles.get(id), now)),
+      ];
 
-    // First candidate who is mutually compatible and not blocked either way.
-    let peer: string | null = null;
-    for (const candidate of rankedCandidates) {
-      if (!isMutuallyCompatible(mine, profiles.get(candidate))) continue;
-      if (!(await isBlockedEitherWay(tx, uid, candidate))) {
-        peer = candidate;
-        break;
+      // First candidate who is mutually compatible and not blocked either
+      // way. The block check is transactional on purpose — it serializes
+      // with blockUser so a racing block can never be paired past.
+      let peer: string | null = null;
+      for (const candidate of rankedCandidates) {
+        if (!isMutuallyCompatible(mine, profiles.get(candidate))) continue;
+        if (!(await isBlockedEitherWay(tx, uid, candidate))) {
+          peer = candidate;
+          break;
+        }
       }
-    }
 
-    if (peer) {
-      // -- Writes --
-      const session = createCallSession(
-        tx,
-        participantSummary(uid, mine),
-        participantSummary(peer, profiles.get(peer)),
+      if (peer) {
+        // -- Writes --
+        const session = createCallSession(
+          tx,
+          participantSummary(uid, mine),
+          participantSummary(peer, profiles.get(peer)),
+          mode,
+          now
+        );
+        return { status: "matched" as const, session, shardsScanned };
+      }
+
+      // Nobody available: wait in the queue, in a random shard. The client
+      // listens to this document and either gets a sessionId or times out
+      // and leaves.
+      tx.set(db().collection("matchmakingQueue").doc(uid), {
+        uid,
         mode,
-        now
+        status: "waiting",
+        shard: Math.floor(Math.random() * shards),
+        ...(preferredPeerId ? { preferredPeerId } : {}),
+        createdAt: now,
+        updatedAt: now,
+      });
+      // `activityBucket` stamped server-side too: a waiting user is active
+      // by definition, and the discovery feed's waiting-pool query orders by
+      // the bucket — a waiter must never be invisible to the hero card just
+      // because their throttled client heartbeat is a few minutes old (or,
+      // during rollout, because their app build predates the field).
+      tx.set(
+        db().collection("publicProfiles").doc(uid),
+        { wantsToTalk: true, activityBucket: activityBucketFloor(now), updatedAt: now },
+        { merge: true }
       );
-      return { status: "matched", session };
-    }
+      return { status: "waiting" as const, shardsScanned };
+    },
+    { maxAttempts: 5 }
+  );
 
-    // Nobody available: wait in the queue. The client listens to this
-    // document and either gets a sessionId or times out and leaves.
-    tx.set(db().collection("matchmakingQueue").doc(uid), {
-      uid,
-      mode,
-      status: "waiting",
-      ...(preferredPeerId ? { preferredPeerId } : {}),
-      createdAt: now,
-      updatedAt: now,
-    });
-    tx.set(
-      db().collection("publicProfiles").doc(uid),
-      { wantsToTalk: true, updatedAt: now },
-      { merge: true }
-    );
-    return { status: "waiting" };
+  if (attempts > 1) {
+    logEvent("matchmaking_txn_retry", { uid, mode, attempts });
+  }
+  const { shardsScanned, rejoined, ...response } = result as typeof result & {
+    shardsScanned?: number;
+    rejoined?: boolean;
+  };
+  logEvent(response.status === "matched" ? "matchmaking_paired" : "matchmaking_waiting", {
+    uid,
+    mode,
+    attempts,
+    ...(shardsScanned !== undefined ? { shardsScanned } : {}),
+    ...(rejoined ? { rejoined } : {}),
   });
+  return response;
 });
 
-export const leaveMatchmakingQueue = onCall(async (request) => {
+export const leaveMatchmakingQueue = onCall(callable(20), async (request) => {
   const uid = requireAuth(request);
 
-  // Piggybacked housekeeping, same as on join: joins and leaves together are
-  // frequent enough to keep the queue clean without a scheduled job.
-  await sweepStaleQueueEntries();
-
+  // Never gated by the kill switch or a rate limit: nobody may be trapped
+  // in the queue by an outage brake.
   await db().runTransaction(async (tx) => {
     const entry = await tx.get(db().collection("matchmakingQueue").doc(uid));
     // Only a waiting entry is removed. A `matched` entry means pairing has
@@ -272,7 +384,10 @@ export const leaveMatchmakingQueue = onCall(async (request) => {
  * flag: a stale flag is a "Talk to Him" invitation nobody is behind, and
  * nothing else ever clears it for a client that died mid-wait.
  *
- * Runs opportunistically on every join and leave — cheap and cron-free.
+ * Scheduled (every minute), NOT run per join/leave: the per-request sweep was
+ * a collection-scan transaction contending with every pairing transaction
+ * (audit P1-2). Correctness never depended on sweep timing — pairing filters
+ * stale entries by TTL — so hygiene can afford a one-minute cadence.
  *
  * A transaction, not a query-then-batch: the moment between reading a stale
  * entry and deleting it is exactly when its owner may rejoin, and a blind
@@ -281,29 +396,65 @@ export const leaveMatchmakingQueue = onCall(async (request) => {
  * sweep re-runs, sees a fresh createdAt, and leaves the entry alone.
  */
 async function sweepStaleQueueEntries(): Promise<number> {
-  return db().runTransaction(async (tx) => {
-    const staleBefore = Timestamp.fromMillis(Date.now() - 2 * QUEUE_ENTRY_TTL_MS);
-    const stale = await tx.get(
-      db()
-        .collection("matchmakingQueue")
-        .where("createdAt", "<", staleBefore)
-        .limit(50)
-    );
-    if (stale.empty) return 0;
+  let sweptTotal = 0;
+  // Bounded batches so one run can clear a large backlog without ever
+  // becoming an unbounded scan inside a single transaction.
+  //
+  // Waiting and matched entries age out on DIFFERENT clocks. A waiting entry
+  // past 2× the pairing TTL is a dead client. A matched entry's createdAt is
+  // its pairing time and the call it points at runs up to SPEED_CALL_SECONDS
+  // — sweeping it mid-call would void join idempotency (a duplicate join
+  // could then double-book someone who is on a live call into a second
+  // session), so matched entries are retired only after the call clock plus
+  // reconnect grace has certainly expired.
+  const WAITING_STALE_MS = 2 * QUEUE_ENTRY_TTL_MS;
+  const MATCHED_STALE_MS = (SPEED_CALL_SECONDS + 90) * 1000;
+  for (let batch = 0; batch < 10; batch += 1) {
+    const swept = await db().runTransaction(async (tx) => {
+      const [staleWaiting, staleMatched] = await Promise.all([
+        tx.get(
+          db()
+            .collection("matchmakingQueue")
+            .where("status", "==", "waiting")
+            .where("createdAt", "<", Timestamp.fromMillis(Date.now() - WAITING_STALE_MS))
+            .limit(25)
+        ),
+        tx.get(
+          db()
+            .collection("matchmakingQueue")
+            .where("status", "==", "matched")
+            .where("createdAt", "<", Timestamp.fromMillis(Date.now() - MATCHED_STALE_MS))
+            .limit(25)
+        ),
+      ]);
+      if (staleWaiting.empty && staleMatched.empty) return 0;
 
-    const now = Timestamp.now();
-    for (const entry of stale.docs) {
-      tx.delete(entry.ref);
-      // Only a waiting entry is advertised; a stale `matched` entry already
-      // had its owner's flag cleared at pairing time.
-      if (entry.get("status") === "waiting") {
+      const now = Timestamp.now();
+      for (const entry of staleWaiting.docs) {
+        tx.delete(entry.ref);
+        // A waiting entry is advertised; withdraw the invitation nobody is
+        // behind. Matched entries already had the flag cleared at pairing.
         tx.set(
           db().collection("publicProfiles").doc(entry.id),
           { wantsToTalk: false, updatedAt: now },
           { merge: true }
         );
       }
-    }
-    return stale.size;
-  });
+      for (const entry of staleMatched.docs) {
+        tx.delete(entry.ref);
+      }
+      return staleWaiting.size + staleMatched.size;
+    });
+    sweptTotal += swept;
+    if (swept < 50) break;
+  }
+  return sweptTotal;
 }
+
+export const sweepMatchmakingQueue = onSchedule(
+  { schedule: "every 1 minutes", ...scheduled(1) },
+  async () => {
+    const swept = await sweepStaleQueueEntries();
+    logEvent("matchmaking_sweep", { swept });
+  }
+);

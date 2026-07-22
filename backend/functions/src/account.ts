@@ -18,10 +18,17 @@
 import { onCall } from "firebase-functions/v2/https";
 import { getAuth } from "firebase-admin/auth";
 import { getStorage } from "firebase-admin/storage";
+import { callable } from "./options";
 import { db, requireAuth } from "./shared";
+import { enforceRateLimit } from "./ratelimit";
 
-export const deleteAccount = onCall(async (request) => {
+export const deleteAccount = onCall(callable(5), async (request) => {
   const uid = requireAuth(request);
+  // Deliberately NOT kill-switchable (the right to leave survives
+  // maintenance mode), but rate-limited: this is the most expensive callable
+  // per invocation, and a legitimate account deletes itself at most once —
+  // the allowance exists only so a crashed run can retry.
+  await enforceRateLimit(uid, "deleteAccount");
   const firestore = db();
 
   // Pair artifacts: every match and conversation this account is in, with

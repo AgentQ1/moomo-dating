@@ -41,10 +41,20 @@ auth method), onboarding, all five tabs (Discover, Calls, Matches, Chat,
 Profile), speed calls over LiveKit with server matchmaking, mutual-match
 gating, chat, blocking/reporting, boosts, and account deletion.
 
-Matchmaking pairs only mutually compatible users (gender + who they want to
-meet) and ranks actively boosted waiters first; Discover applies the same
-compatibility filter. See `backend/README.md` for the callable surface and
-`docs/IMPLEMENTATION_MAP.md` for the screen-by-screen map.
+Chat is organised Hinge-style: collapsible Your turn / Their turn / Hidden
+sections, a your-turn count badge on the Chat tab, swipe-left row actions
+(Unmatch with a private reason, Hide/Unhide, We Met), and Block/Report/Unmatch
+menus on the chat thread and match cards. Per-user hidden/met state lives on
+the conversation document; unmatching goes through the `unmatchUser` callable.
 
-App Check is wired client-side but not enforced (`docs/FIREBASE_SETUP.md`).
+Matchmaking pairs only mutually compatible users (gender + who they want to
+meet) and ranks actively boosted waiters first; Discover is served by the
+`getDiscoveryFeed` callable (server-side compatibility + block filtering —
+clients can no longer list `publicProfiles`). See `backend/README.md` for the
+callable surface and `docs/IMPLEMENTATION_MAP.md` for the screen-by-screen map.
+
+App Check is enforced in code on every callable; the Firebase console must
+register the app (App Attest + debug tokens) BEFORE the backend deploys — see
+`backend/README.md` "App Check". Production-readiness state, conditions, and
+remaining launch blockers: `docs/production-readiness/EXECUTIVE_SUMMARY.md`.
 Light mode is locked in `app/Info.plist` until a real dark palette ships.

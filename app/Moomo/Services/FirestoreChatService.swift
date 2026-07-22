@@ -69,6 +69,35 @@ final class FirestoreChatService: ChatService, @unchecked Sendable {
             .updateData(["unreadCounts.\(uid)": 0])
     }
 
+    func setHidden(_ hidden: Bool, in conversationID: String) async throws {
+        try await setOwnFlag("hiddenBy", to: hidden, in: conversationID)
+    }
+
+    func setWeMet(_ met: Bool, in conversationID: String) async throws {
+        try await setOwnFlag("metBy", to: met, in: conversationID)
+    }
+
+    /// Writes `field.{uid}` on the conversation — the per-user map shape the
+    /// rules whitelist, mirroring `unreadCounts`. The listener echoes the
+    /// change back into the stream immediately via local latency compensation.
+    private func setOwnFlag(_ field: String, to value: Bool, in conversationID: String) async throws {
+        do {
+            try await db.collection(FirestorePath.conversations).document(conversationID)
+                .updateData(["\(field).\(uid)": value])
+        } catch {
+            // Not-found or permission-denied both mean the conversation is
+            // gone from under us (unmatch/block cascade) — same user-facing
+            // truth as a failed send.
+            let nsError = error as NSError
+            if nsError.domain == FirestoreErrorDomain,
+               nsError.code == FirestoreErrorCode.notFound.rawValue
+                   || nsError.code == FirestoreErrorCode.permissionDenied.rawValue {
+                throw ChatError.unknownConversation
+            }
+            throw error
+        }
+    }
+
     // MARK: - Messages
 
     func messagesStream(in conversationID: String) -> AsyncStream<[Message]> {
@@ -156,6 +185,8 @@ final class FirestoreChatService: ChatService, @unchecked Sendable {
 
         let participants = document.get("participants") as? [String: [String: Any]]
         let unreadCounts = document.get("unreadCounts") as? [String: Int]
+        let hiddenBy = document.get("hiddenBy") as? [String: Bool]
+        let metBy = document.get("metBy") as? [String: Bool]
 
         var lastMessage: Message?
         if let preview = document.get("lastMessage") as? [String: Any],
@@ -176,7 +207,9 @@ final class FirestoreChatService: ChatService, @unchecked Sendable {
             participant: SocialDecoding.candidate(fromParticipant: participants?[peerID], uid: peerID),
             createdAt: SocialDecoding.date(document.get("createdAt")) ?? Date(),
             lastMessage: lastMessage,
-            unreadCount: unreadCounts?[me] ?? 0
+            unreadCount: unreadCounts?[me] ?? 0,
+            isHiddenByMe: hiddenBy?[me] ?? false,
+            metByMe: metBy?[me] ?? false
         )
     }
 

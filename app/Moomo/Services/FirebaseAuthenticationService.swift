@@ -106,11 +106,35 @@ final class FirebaseAuthenticationService: AuthenticationService, @unchecked Sen
             // Supersede any restore still running for a previous auth state.
             lock.lock()
             let previous = restoreTask
+            let initialStateResolved = hasPublishedInitialSessionState
             lock.unlock()
             previous?.cancel()
 
             guard let firebaseUser else {
-                publish(nil)
+                // FirebaseAuth 11 restores the persisted session from the
+                // keychain ASYNCHRONOUSLY: on a cold launch this listener can
+                // fire nil first and then fire again with the restored user a
+                // beat later. Before anything has been published, nil is
+                // therefore "possibly still restoring", not "signed out" —
+                // publishing it immediately flashed the welcome screen at
+                // every returning user. Hold the verdict briefly; the second
+                // listener fire cancels it (via restoreTask supersede above)
+                // and restores the user without welcome ever rendering. A
+                // genuinely signed-out launch just shows the splash for the
+                // grace period. After the initial resolve, nil is a real
+                // sign-out/revocation and publishes immediately.
+                if initialStateResolved {
+                    publish(nil)
+                } else {
+                    let task = Task { [weak self] in
+                        try? await Task.sleep(for: .milliseconds(500))
+                        guard !Task.isCancelled else { return }
+                        self?.publish(nil)
+                    }
+                    lock.lock()
+                    restoreTask = task
+                    lock.unlock()
+                }
                 return
             }
 

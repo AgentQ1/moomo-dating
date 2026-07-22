@@ -93,7 +93,14 @@ final class AppServices: ObservableObject {
         let safety = FirestoreSafetyService(uid: uid)
         return AppServices(
             discovery: BlockFilteringDiscoveryService(
-                base: FirestoreDiscoveryService(uid: uid),
+                // The gate sits directly on the callable service: its retry
+                // must re-run the feed call, not the block filtering.
+                base: AuthGatedDiscoveryService(
+                    base: FirestoreDiscoveryService(uid: uid),
+                    currentUID: { DiscoveryDiagnostics.currentUID() },
+                    refreshSession: { await DiscoveryDiagnostics.refreshIDToken() },
+                    appCheckProblem: { await DiscoveryDiagnostics.appCheckProblem() }
+                ),
                 safety: safety
             ),
             calls: FirestoreCallService(uid: uid),
@@ -140,10 +147,18 @@ final class AppServices: ObservableObject {
             ))
         })
 
-        let safety = MockSafetyService(onBlock: { userID in
-            await matches.removeMatches(with: userID)
-            await chat.removeConversations(with: userID)
-        })
+        let safety = MockSafetyService(
+            onBlock: { userID in
+                await matches.removeMatches(with: userID)
+                await chat.removeConversations(with: userID)
+            },
+            // Same teardown as a block, without the block: the pair can still
+            // meet again through a future call.
+            onUnmatch: { userID in
+                await matches.removeMatches(with: userID)
+                await chat.removeConversations(with: userID)
+            }
+        )
 
         let calls = MockCallService(isBlocked: { await safety.isBlocked($0) })
 

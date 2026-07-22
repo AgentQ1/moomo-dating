@@ -33,6 +33,7 @@ const { getFirestore, Timestamp } = await import('firebase-admin/firestore');
 
 const db = getFirestore();
 const blockUser = fft.wrap(functions.blockUser);
+const unmatchUser = fft.wrap(functions.unmatchUser);
 
 const ALICE = 'alice-uid';
 const BOB = 'bob-uid';
@@ -161,6 +162,70 @@ describe('blockUser — the cascade', () => {
   test('an unauthenticated call is refused', async () => {
     await assert.rejects(
       blockUser({ data: { blockedUserId: BOB } }),
+      /Sign in first/
+    );
+  });
+});
+
+describe('unmatchUser — teardown without a block', () => {
+  beforeEach(clearFirestore);
+
+  test('removes match, conversation, and messages, and records the private reason', async () => {
+    await seedPair();
+
+    const result = await unmatchUser(asAlice({ otherUserId: BOB, reason: 'not_interested' }));
+    assert.deepEqual(result, { unmatched: true });
+
+    assert.ok(!(await db.doc(`matches/${PAIR}`).get()).exists, 'match must be deleted');
+    assert.ok(!(await db.doc(`conversations/${CONV_ID}`).get()).exists, 'conversation must be deleted');
+    const messages = await db.collection(`conversations/${CONV_ID}/messages`).get();
+    assert.equal(messages.size, 0, 'messages must be swept');
+
+    const records = await db.collection('unmatches').get();
+    assert.equal(records.size, 1);
+    const record = records.docs[0];
+    assert.equal(record.get('unmatchedBy'), ALICE);
+    assert.equal(record.get('otherUserId'), BOB);
+    assert.equal(record.get('matchId'), PAIR);
+    assert.equal(record.get('reason'), 'not_interested');
+
+    // Unmatch is not a block: no block document either way.
+    assert.ok(!(await db.doc(`blocks/${ALICE}/blocked/${BOB}`).get()).exists);
+    assert.ok(!(await db.doc(`blocks/${BOB}/blocked/${ALICE}`).get()).exists);
+  });
+
+  test('a missing reason is recorded as no_reason', async () => {
+    await seedPair();
+    await unmatchUser(asAlice({ otherUserId: BOB }));
+    const records = await db.collection('unmatches').get();
+    assert.equal(records.docs[0].get('reason'), 'no_reason');
+  });
+
+  test('an invalid reason is refused', async () => {
+    await seedPair();
+    await assert.rejects(
+      unmatchUser(asAlice({ otherUserId: BOB, reason: 'they_were_boring' })),
+      /Invalid reason/
+    );
+    assert.ok((await db.doc(`matches/${PAIR}`).get()).exists, 'nothing may be torn down');
+  });
+
+  test('unmatching without a match is refused', async () => {
+    await assert.rejects(
+      unmatchUser(asAlice({ otherUserId: BOB, reason: 'no_reason' })),
+      /No such match/
+    );
+    const records = await db.collection('unmatches').get();
+    assert.equal(records.size, 0, 'no phantom record');
+  });
+
+  test('self-unmatch and unauthenticated calls are refused', async () => {
+    await assert.rejects(
+      unmatchUser(asAlice({ otherUserId: ALICE })),
+      /cannot unmatch yourself/
+    );
+    await assert.rejects(
+      unmatchUser({ data: { otherUserId: BOB } }),
       /Sign in first/
     );
   });

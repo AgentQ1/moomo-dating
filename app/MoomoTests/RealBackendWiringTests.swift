@@ -57,6 +57,9 @@ final class RealBackendWiringTests: XCTestCase {
             throw Unreachable()
         }
         func reports() async -> [Report] { [] }
+        func unmatch(_ candidate: DiscoveryCandidate, reason: UnmatchReason) async throws {
+            throw Unreachable()
+        }
     }
 
     private func startedFlow(
@@ -202,5 +205,21 @@ final class RealBackendWiringTests: XCTestCase {
             "The mock world must never open real capture devices"
         )
         XCTAssertTrue(services.callPermissions is StubCallPermissions)
+    }
+
+    // MARK: - Firebase bootstrap ordering
+
+    func testAppCheckFactoryInstallsBeforeFirebaseConfigures() {
+        // `configureIfNeeded` routes its two steps through this seam. The
+        // ordering is the whole point: a factory installed after
+        // `FirebaseApp.configure()` loses the race for the first token
+        // fetch, every callable then goes out unattested, and the enforcing
+        // backend refuses the lot with a bare `unauthenticated`.
+        var steps: [String] = []
+        FirebaseBootstrap.runConfigurationSteps(
+            installAppCheckFactory: { steps.append("app-check-factory") },
+            configureFirebase: { steps.append("firebase-configure") }
+        )
+        XCTAssertEqual(steps, ["app-check-factory", "firebase-configure"])
     }
 }

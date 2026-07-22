@@ -5,19 +5,26 @@
  * Moomo AI app and must never receive these (guarded in .firebaserc; verify
  * `firebase use` before every deploy).
  *
- * App Check is not enforced yet (Phase 5): every callable currently accepts
- * requests from any client holding a valid Firebase Auth token. Flip
- * `enforceAppCheck: true` per-callable once the iOS app registers App Attest.
+ * App Check IS enforced on every callable (see options.ts `callable`):
+ * requests without a valid App Check token are refused before any handler
+ * runs. Deploy-order matters — register the iOS app (App Attest) and every
+ * developer's debug token in Firebase console BEFORE deploying this, or all
+ * callables lock real users out. See backend/README.md "App Check".
  */
 import { initializeApp } from "firebase-admin/app";
 
 initializeApp();
 
-export { joinMatchmakingQueue, leaveMatchmakingQueue } from "./matchmaking";
+export {
+  joinMatchmakingQueue,
+  leaveMatchmakingQueue,
+  sweepMatchmakingQueue,
+} from "./matchmaking";
+export { getDiscoveryFeed } from "./discovery";
 export { endCallSession } from "./calls";
 export { getCallMediaToken } from "./media";
 export { submitCallDecision } from "./decisions";
-export { blockUser, reportUser } from "./safety";
+export { blockUser, reportUser, unmatchUser } from "./safety";
 export { activateBoost } from "./boost";
 export { sendSystemNotification } from "./notifications";
 export { onMessageCreated } from "./chat";

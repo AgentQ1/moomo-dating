@@ -407,7 +407,7 @@ describe('publicProfiles/{uid} — readable by signed-in users, owner-written', 
     );
   });
 
-  test('another signed-in user CAN read it — Discover is served from Firestore', async () => {
+  test('another signed-in user CAN still read a single profile — a matched partner\'s card', async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await setDoc(doc(ctx.firestore(), 'publicProfiles', BOB), {
         uid: BOB,
@@ -417,17 +417,28 @@ describe('publicProfiles/{uid} — readable by signed-in users, owner-written', 
     await assertSucceeds(getDoc(doc(as(ALICE), 'publicProfiles', BOB)));
   });
 
-  test('the collection can be listed in app-sized pages (Discover asks for 25)', async () => {
-    await assertSucceeds(
+  // -- The anti-scrape redesign (audit P0-3): NO client list, at any size. --
+  // Browsing goes through the getDiscoveryFeed callable (Admin SDK), which
+  // is bounded, block-filtered, rate-limited, and cursor-free. An
+  // authenticated script must not be able to page the base at all.
+
+  test('a signed-in user cannot list the collection even in app-sized pages', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'publicProfiles', BOB), { uid: BOB });
+    });
+    await assertFails(
       getDocs(query(collection(as(ALICE), 'publicProfiles'), limit(25)))
+    );
+    await assertFails(
+      getDocs(query(collection(as(ALICE), 'publicProfiles'), limit(1)))
     );
   });
 
-  test('an unbounded list is denied — scraping must come in pages or not at all', async () => {
+  test('an unbounded list is denied', async () => {
     await assertFails(getDocs(collection(as(ALICE), 'publicProfiles')));
   });
 
-  test('a list over the page cap is denied', async () => {
+  test('a large page is denied', async () => {
     await assertFails(
       getDocs(query(collection(as(ALICE), 'publicProfiles'), limit(500)))
     );
@@ -662,6 +673,135 @@ describe('publicProfiles/{uid} — readable by signed-in users, owner-written', 
         updatedAt: serverTimestamp(),
       })
     );
+  });
+
+  // -- activityBucket: the feed's coarse ordering stamp (audit P1-1). --
+  // The heartbeat quantizes lastActiveAt to a 10-minute bucket so the
+  // ordering index isn't a monotonic hotspot. Honesty rules mirror
+  // presenceIsHonest: aligned, and within clock-skew distance of now.
+
+  const BUCKET_MS = 10 * 60 * 1000;
+  /** The bucket a truthful client computes right now (floor of now). */
+  const currentBucket = () =>
+    Timestamp.fromMillis(Math.floor(Date.now() / BUCKET_MS) * BUCKET_MS);
+
+  const heartbeat = (bucket) => ({
+    uid: ALICE,
+    lastActiveAt: serverTimestamp(),
+    activityBucket: bucket,
+    updatedAt: serverTimestamp(),
+  });
+
+  test('the throttled heartbeat with a truthful activityBucket is accepted', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(ALICE), 'publicProfiles', ALICE), heartbeat(currentBucket()))
+    );
+  });
+
+  test('the full projection may carry a truthful activityBucket', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(ALICE), 'publicProfiles', ALICE), {
+        ...fullProjection(ALICE),
+        activityBucket: currentBucket(),
+      })
+    );
+  });
+
+  test('the heartbeat UPDATE over an existing full projection is accepted — the exact write Discover sends', async () => {
+    // What production actually looks like: a complete profile with
+    // server-set flags already present, receiving the throttled heartbeat
+    // merge (uid + lastActiveAt + activityBucket + updatedAt). If this is
+    // ever denied, Discover's presence write silently dies — it must stay
+    // provably legal alongside the anti-scrape rules.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'publicProfiles', ALICE), {
+        uid: ALICE,
+        displayName: 'Alice',
+        age: 30,
+        city: 'Austin',
+        gender: 'woman',
+        interestedIn: ['everyone'],
+        photoPaths: [`users/${ALICE}/photos/p1.jpg`],
+        lastActiveAt: Timestamp.fromMillis(Date.now() - 60 * 60 * 1000),
+        wantsToTalk: true,
+        boostedUntil: Timestamp.fromMillis(Date.now() + 60_000),
+        updatedAt: Timestamp.now(),
+      });
+    });
+    await assertSucceeds(
+      setDoc(
+        doc(as(ALICE), 'publicProfiles', ALICE),
+        {
+          uid: ALICE,
+          lastActiveAt: serverTimestamp(),
+          activityBucket: currentBucket(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      )
+    );
+  });
+
+  test('an unaligned activityBucket is rejected — quantization is the hotspot fix', async () => {
+    await assertFails(
+      setDoc(
+        doc(as(ALICE), 'publicProfiles', ALICE),
+        heartbeat(Timestamp.fromMillis(Math.floor(Date.now() / BUCKET_MS) * BUCKET_MS + 1234))
+      )
+    );
+  });
+
+  test('a future activityBucket is rejected — nobody sits atop Discover from tomorrow', async () => {
+    await assertFails(
+      setDoc(
+        doc(as(ALICE), 'publicProfiles', ALICE),
+        heartbeat(Timestamp.fromMillis((Math.floor(Date.now() / BUCKET_MS) + 2) * BUCKET_MS))
+      )
+    );
+  });
+
+  test('an ancient activityBucket is rejected — idle clients cannot replay activity', async () => {
+    await assertFails(
+      setDoc(
+        doc(as(ALICE), 'publicProfiles', ALICE),
+        heartbeat(Timestamp.fromMillis((Math.floor(Date.now() / BUCKET_MS) - 3) * BUCKET_MS))
+      )
+    );
+  });
+
+  test('a non-timestamp activityBucket is rejected', async () => {
+    await assertFails(
+      setDoc(doc(as(ALICE), 'publicProfiles', ALICE), heartbeat(1721500000000))
+    );
+  });
+});
+
+describe('rateLimits and config — operational collections stay server-only', () => {
+  test('a user cannot read or reset their own rate-limit counter', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'rateLimits', `${ALICE}_joinMatchmakingQueue`), {
+        uid: ALICE,
+        action: 'joinMatchmakingQueue',
+        windowStartMillis: Date.now(),
+        count: 12,
+      });
+    });
+    const ref = doc(as(ALICE), 'rateLimits', `${ALICE}_joinMatchmakingQueue`);
+    await assertFails(getDoc(ref));
+    await assertFails(setDoc(ref, { count: 0 }));
+    await assertFails(deleteDoc(ref));
+    await assertFails(getDocs(collection(as(ALICE), 'rateLimits')));
+  });
+
+  test('the kill-switch document is not client-readable or client-writable', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'config', 'runtime'), { maintenanceMode: false });
+    });
+    await assertFails(getDoc(doc(as(ALICE), 'config', 'runtime')));
+    await assertFails(
+      setDoc(doc(as(ALICE), 'config', 'runtime'), { maintenanceMode: false })
+    );
+    await assertFails(getDoc(doc(anon(), 'config', 'runtime')));
   });
 });
 
@@ -1199,6 +1339,113 @@ describe('conversations — markRead is the only client write', () => {
       collection(as(ALICE), 'conversations'),
       where('participantIds', 'array-contains', ALICE)
     )));
+  });
+});
+
+describe('conversations — per-user hiddenBy/metBy flags', () => {
+  async function seedConversation(id, participantIds, extra = {}) {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'conversations', id), {
+        participantIds,
+        matchId: `match-${id}`,
+        createdAt: Timestamp.now(),
+        lastMessageAt: Timestamp.now(),
+        unreadCounts: Object.fromEntries(participantIds.map((p) => [p, 0])),
+        ...extra,
+      });
+    });
+  }
+
+  test('a participant can hide and unhide for themselves', async () => {
+    await seedConversation('c1', [ALICE, BOB]);
+    await assertSucceeds(
+      updateDoc(doc(as(ALICE), 'conversations', 'c1'), { [`hiddenBy.${ALICE}`]: true })
+    );
+    await assertSucceeds(
+      updateDoc(doc(as(ALICE), 'conversations', 'c1'), { [`hiddenBy.${ALICE}`]: false })
+    );
+  });
+
+  test('a participant can record their own we-met answer', async () => {
+    await seedConversation('c1', [ALICE, BOB]);
+    await assertSucceeds(
+      updateDoc(doc(as(ALICE), 'conversations', 'c1'), { [`metBy.${ALICE}`]: true })
+    );
+  });
+
+  test("a participant cannot touch the other person's flags", async () => {
+    await seedConversation('c1', [ALICE, BOB]);
+    await assertFails(
+      updateDoc(doc(as(ALICE), 'conversations', 'c1'), { [`hiddenBy.${BOB}`]: true })
+    );
+    await assertFails(
+      updateDoc(doc(as(ALICE), 'conversations', 'c1'), { [`metBy.${BOB}`]: true })
+    );
+  });
+
+  test('flags must be booleans', async () => {
+    await seedConversation('c1', [ALICE, BOB]);
+    await assertFails(
+      updateDoc(doc(as(ALICE), 'conversations', 'c1'), { [`hiddenBy.${ALICE}`]: 'yes' })
+    );
+    await assertFails(
+      updateDoc(doc(as(ALICE), 'conversations', 'c1'), { [`metBy.${ALICE}`]: 1 })
+    );
+  });
+
+  test('flag writes cannot smuggle other fields along', async () => {
+    await seedConversation('c1', [ALICE, BOB]);
+    await assertFails(
+      updateDoc(doc(as(ALICE), 'conversations', 'c1'), {
+        [`hiddenBy.${ALICE}`]: true,
+        lastMessage: { senderId: ALICE, text: 'forged', sentAt: Timestamp.now() },
+      })
+    );
+  });
+
+  test('a combined own-keys write (markRead + hide + met) is allowed', async () => {
+    await seedConversation('c1', [ALICE, BOB], { unreadCounts: { [ALICE]: 3, [BOB]: 0 } });
+    await assertSucceeds(
+      updateDoc(doc(as(ALICE), 'conversations', 'c1'), {
+        [`unreadCounts.${ALICE}`]: 0,
+        [`hiddenBy.${ALICE}`]: true,
+        [`metBy.${ALICE}`]: true,
+      })
+    );
+  });
+
+  test('a non-participant cannot hide anything', async () => {
+    await seedConversation('c1', [ALICE, BOB]);
+    await assertFails(
+      updateDoc(doc(as(CHARLIE), 'conversations', 'c1'), { [`hiddenBy.${CHARLIE}`]: true })
+    );
+  });
+});
+
+describe('unmatches — entirely server-owned (unmatchUser callable)', () => {
+  test('nobody can file, read, or list unmatch records from the client', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'unmatches', 'u1'), {
+        unmatchedBy: ALICE,
+        otherUserId: BOB,
+        matchId: 'm1',
+        reason: 'not_interested',
+        createdAt: Timestamp.now(),
+      });
+    });
+
+    // Not the author, not the subject, not a stranger.
+    await assertFails(getDoc(doc(as(ALICE), 'unmatches', 'u1')));
+    await assertFails(getDoc(doc(as(BOB), 'unmatches', 'u1')));
+    await assertFails(getDocs(collection(as(CHARLIE), 'unmatches')));
+    await assertFails(
+      setDoc(doc(as(ALICE), 'unmatches', 'forged'), {
+        unmatchedBy: ALICE,
+        otherUserId: BOB,
+        reason: 'no_reason',
+        createdAt: Timestamp.now(),
+      })
+    );
   });
 });
 

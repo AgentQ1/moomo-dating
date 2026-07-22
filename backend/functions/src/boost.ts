@@ -9,15 +9,23 @@
  */
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { Timestamp } from "firebase-admin/firestore";
+import { callable } from "./options";
 import {
   db,
   requireAuth,
   BOOST_DAILY_ALLOWANCE,
   BOOST_DURATION_MS,
 } from "./shared";
+import { enforceRateLimit } from "./ratelimit";
+import { requireEnabled } from "./runtime";
 
-export const activateBoost = onCall(async (request) => {
+export const activateBoost = onCall(callable(10), async (request) => {
   const uid = requireAuth(request);
+
+  await requireEnabled("activateBoost", "boostsEnabled");
+  // The daily allowance already bounds SUCCESSFUL activations; this bounds
+  // the failed-attempt loop a script would otherwise spin for free.
+  await enforceRateLimit(uid, "activateBoost");
 
   return db().runTransaction(async (tx) => {
     const ref = db().collection("boosts").doc(uid);

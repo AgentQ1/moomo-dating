@@ -10,11 +10,13 @@ import FirebaseFunctions
 enum CloudFunction: String {
     case joinMatchmakingQueue
     case leaveMatchmakingQueue
+    case getDiscoveryFeed
     case endCallSession
     case getCallMediaToken
     case submitCallDecision
     case blockUser
     case reportUser
+    case unmatchUser
     case activateBoost
     case deleteAccount
 }
@@ -88,14 +90,11 @@ enum SocialDecoding {
         )
     }
 
-    /// Renders "Talk to Him/Her/Them". `they` whenever we don't know — a
-    /// wrong guess misgenders someone; the neutral default never does.
+    /// Renders "Talk to Him/Her/Them". One table for the whole app — the
+    /// mapping itself lives on `CandidatePronoun` (DiscoveryPresence.swift)
+    /// so the feed decoder shares it.
     static func pronoun(fromGender gender: String?) -> CandidatePronoun {
-        switch gender {
-        case Gender.man.rawValue: .he
-        case Gender.woman.rawValue: .she
-        default: .they
-        }
+        CandidatePronoun(genderRawValue: gender)
     }
 
     /// The other participant's uid in a two-person `participantIds` array.

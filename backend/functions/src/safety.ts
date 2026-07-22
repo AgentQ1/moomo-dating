@@ -12,6 +12,7 @@
  */
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { Timestamp } from "firebase-admin/firestore";
+import { callable } from "./options";
 import {
   db,
   requireAuth,
@@ -20,11 +21,13 @@ import {
   conversationIdFor,
   historyRef,
   REPORT_REASONS,
+  UNMATCH_REASONS,
   REPORTS_PER_DAY_LIMIT,
   BLOCKS_PER_DAY_LIMIT,
 } from "./shared";
+import { logEvent } from "./observability";
 
-export const blockUser = onCall(async (request) => {
+export const blockUser = onCall(callable(10), async (request) => {
   const uid = requireAuth(request);
   const blockedUserId = requireString(request.data?.blockedUserId, "blockedUserId");
   if (blockedUserId === uid) {
@@ -139,10 +142,77 @@ export const blockUser = onCall(async (request) => {
     db().collection("conversations").doc(conversationIdFor(uid, blockedUserId))
   );
 
+  // The cascade's completion is a safety-critical fact worth a metric: a
+  // rising gap between blockUser invocations and this event means crashed
+  // cascades (message sweeps) are accumulating.
+  logEvent("block_cascade_completed", { uid });
+
   return { blocked: true };
 });
 
-export const reportUser = onCall(async (request) => {
+/**
+ * Ends a match: the match and its conversation are removed for BOTH people,
+ * and the reason is stored where only moderation can read it. A callable for
+ * the same reason blockUser is one — a half-unmatch that deletes the match
+ * but leaves the chat open would let a tampered client keep messaging
+ * someone who ended things.
+ *
+ * Deliberately NOT a block: the pair may meet again through a future call
+ * and mutually re-match. The unmatch sheet offers a block on top for anyone
+ * who wants the full severance.
+ */
+export const unmatchUser = onCall(callable(10), async (request) => {
+  const uid = requireAuth(request);
+  const otherUserId = requireString(request.data?.otherUserId, "otherUserId");
+  if (otherUserId === uid) {
+    throw new HttpsError("invalid-argument", "You cannot unmatch yourself.");
+  }
+  const reason =
+    request.data?.reason === undefined
+      ? "no_reason"
+      : requireString(request.data.reason, "reason");
+  if (!(UNMATCH_REASONS as readonly string[]).includes(reason)) {
+    throw new HttpsError("invalid-argument", "Invalid reason.");
+  }
+
+  const now = Timestamp.now();
+  const conversationRef = db()
+    .collection("conversations")
+    .doc(conversationIdFor(uid, otherUserId));
+
+  await db().runTransaction(async (tx) => {
+    const matchRef = db().collection("matches").doc(pairKey(uid, otherUserId));
+    const match = await tx.get(matchRef);
+    // The pair-keyed id already binds the caller to the match; the membership
+    // check is belt-and-braces against a key scheme change.
+    const participantIds = match.get("participantIds") as string[] | undefined;
+    if (!match.exists || !participantIds?.includes(uid)) {
+      throw new HttpsError("not-found", "No such match.");
+    }
+
+    // The private record, atomic with the teardown. Server-owned: the other
+    // person never learns an unmatch had a reason, and moderation reviews
+    // the harm-shaped ones (fake profile, underage, danger, …).
+    tx.create(db().collection("unmatches").doc(), {
+      unmatchedBy: uid,
+      otherUserId,
+      matchId: matchRef.id,
+      reason,
+      createdAt: now,
+    });
+    tx.delete(matchRef);
+    // Same crash-safety story as blockUser: once the conversation document
+    // is gone, rules refuse every read and write to the thread beneath it.
+    tx.delete(conversationRef);
+  });
+
+  // Sweep the orphaned messages; a crash here exposes nothing (see above).
+  await db().recursiveDelete(conversationRef);
+
+  return { unmatched: true };
+});
+
+export const reportUser = onCall(callable(10), async (request) => {
   const uid = requireAuth(request);
   const reportedUserId = requireString(request.data?.reportedUserId, "reportedUserId");
   if (reportedUserId === uid) {

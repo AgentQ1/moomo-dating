@@ -260,6 +260,94 @@ final class MVPFlowUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Hey there 👋"].waitForExistence(timeout: 4))
     }
 
+    // MARK: - Chat row swipe actions
+
+    /// Swiping a conversation row left must reveal Unmatch / Hide / We Met,
+    /// Hide must move the row into the Hidden section, and the hidden row's
+    /// swipe must offer Unhide and restore it. Regression: the drag was
+    /// attached with `.gesture`, which never fires inside a `ScrollView`
+    /// (the scroll pan claims the touches), so swiping did nothing.
+    func testSwipeLeftOnChatRowRevealsActionsAndHideUnhideWork() {
+        let app = launchToDiscover()
+        runCallToDecision(app)
+
+        app.buttons["call.decision.like"].tap()
+        XCTAssertTrue(app.staticTexts["It's a Match!"].waitForExistence(timeout: 6))
+        app.buttons["call.match.sendMessage"].tap()
+        XCTAssertTrue(chatInput(app).waitForExistence(timeout: 6), "The match's chat must open")
+        app.navigationBars.buttons.firstMatch.tap() // back to the chat list
+
+        // The fresh conversation sits under "Your turn"; nothing is hidden.
+        let row = app.buttons["chat.row.Kenji"]
+        XCTAssertTrue(row.waitForExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["chat.section.yourTurn"].exists)
+        XCTAssertFalse(app.buttons["chat.section.hidden"].exists)
+
+        swipeRowLeft(row, in: app)
+        let hide = app.buttons["Hide"].firstMatch
+        XCTAssertTrue(
+            waitUntilHittable(hide),
+            "Swiping a row left must reveal its actions"
+        )
+        // Regression: the swipe's touch-up used to ALSO fire the row's tap
+        // (Button fires on touch-up-inside even after a drag) and push the
+        // thread over the revealed actions.
+        XCTAssertTrue(
+            app.buttons["chat.section.yourTurn"].exists,
+            "A swipe must reveal actions without opening the thread"
+        )
+        XCTAssertTrue(app.buttons["Unmatch"].firstMatch.isHittable)
+        XCTAssertTrue(app.buttons["We Met"].firstMatch.isHittable)
+        hide.tap()
+
+        // Hide moves the row into the Hidden section…
+        XCTAssertTrue(
+            app.buttons["chat.section.hidden"].waitForExistence(timeout: 4),
+            "Hiding the only conversation must create the Hidden section"
+        )
+
+        // …where its swipe offers Unhide, which restores it.
+        swipeRowLeft(row, in: app)
+        let unhide = app.buttons["Unhide"].firstMatch
+        XCTAssertTrue(waitUntilHittable(unhide), "A hidden row must offer Unhide")
+        unhide.tap()
+
+        XCTAssertTrue(app.buttons["chat.section.yourTurn"].waitForExistence(timeout: 4))
+        let hiddenGone = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.buttons["chat.section.hidden"]
+        )
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [hiddenGone], timeout: 4), .completed,
+            "Unhiding the only hidden conversation must remove the section"
+        )
+
+        // A plain tap — no drag — still opens the thread.
+        row.tap()
+        XCTAssertTrue(
+            chatInput(app).waitForExistence(timeout: 6),
+            "Tapping a row must still open its conversation"
+        )
+    }
+
+    /// A controlled horizontal drag across the row, like a finger swipe.
+    private func swipeRowLeft(_ row: XCUIElement, in app: XCUIApplication) {
+        let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+        let end = row.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    /// The action buttons exist in the hierarchy even while covered by the
+    /// row content, so `exists` cannot prove the swipe worked — only
+    /// hittability can.
+    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 3) -> Bool {
+        let hittable = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isHittable == true"),
+            object: element
+        )
+        return XCTWaiter().wait(for: [hittable], timeout: timeout) == .completed
+    }
+
     func testChatTabHasRealContentNotAPlaceholder() {
         let app = launchToDiscover()
 

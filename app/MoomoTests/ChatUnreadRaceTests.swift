@@ -32,6 +32,9 @@ final class ChatUnreadRaceTests: XCTestCase {
                 conversations[index].unreadCount = 0
             }
         }
+
+        func setHidden(_ hidden: Bool, in conversationID: String) async throws {}
+        func setWeMet(_ met: Bool, in conversationID: String) async throws {}
     }
 
     private let peer = DiscoveryCandidate(
@@ -41,7 +44,9 @@ final class ChatUnreadRaceTests: XCTestCase {
 
     func testUnreadClearsWhenTheConversationSnapshotArrivesAfterTheMessages() async {
         let service = ScriptedChatService()
-        let model = ChatDetailModel(conversationID: "c1", service: service)
+        let model = ChatDetailModel(
+            conversationID: "c1", service: service, safety: MockSafetyService()
+        )
 
         // Messages land first — before the conversation list knows the thread.
         service.messagesBroadcaster.send([

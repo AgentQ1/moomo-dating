@@ -18,6 +18,14 @@ protocol ChatService: Sendable {
     func send(_ text: String, in conversationID: String) async throws -> Message
 
     func markRead(_ conversationID: String) async
+
+    /// Hides (or unhides) the conversation for the LOCAL user only. The other
+    /// person's list is untouched and they are never told.
+    func setHidden(_ hidden: Bool, in conversationID: String) async throws
+
+    /// Records the LOCAL user's "we met in person" answer. Per-user state,
+    /// kept for later safety check-ins and match feedback.
+    func setWeMet(_ met: Bool, in conversationID: String) async throws
 }
 
 enum ChatError: LocalizedError, Equatable {
@@ -90,6 +98,27 @@ final class MockChatService: ChatService, @unchecked Sendable {
             guard let index = conversations.firstIndex(where: { $0.id == conversationID }),
                   conversations[index].unreadCount > 0 else { return }
             conversations[index].unreadCount = 0
+        }
+    }
+
+    func setHidden(_ hidden: Bool, in conversationID: String) async throws {
+        try updateConversation(conversationID) { $0.isHiddenByMe = hidden }
+    }
+
+    func setWeMet(_ met: Bool, in conversationID: String) async throws {
+        try updateConversation(conversationID) { $0.metByMe = met }
+    }
+
+    private func updateConversation(
+        _ conversationID: String,
+        _ mutate: (inout Conversation) -> Void
+    ) throws {
+        guard conversationsBroadcaster.value.contains(where: { $0.id == conversationID }) else {
+            throw ChatError.unknownConversation
+        }
+        conversationsBroadcaster.update { conversations in
+            guard let index = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+            mutate(&conversations[index])
         }
     }
 

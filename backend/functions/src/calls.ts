@@ -9,6 +9,7 @@
  */
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { Timestamp } from "firebase-admin/firestore";
+import { callable } from "./options";
 import {
   db,
   requireAuth,
@@ -21,7 +22,7 @@ import {
   SPEED_CALL_SECONDS,
 } from "./shared";
 
-export const endCallSession = onCall(async (request) => {
+export const endCallSession = onCall(callable(20), async (request) => {
   const uid = requireAuth(request);
   const sessionId = requireString(request.data?.sessionId, "sessionId");
   const reason = requireString(request.data?.reason, "reason") as EndReason;

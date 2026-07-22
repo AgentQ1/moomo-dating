@@ -16,6 +16,7 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { defineSecret, defineString } from "firebase-functions/params";
 import { AccessToken } from "livekit-server-sdk";
+import { callable } from "./options";
 import {
   db,
   requireAuth,
@@ -24,6 +25,8 @@ import {
   millis,
   SPEED_CALL_SECONDS,
 } from "./shared";
+import { enforceRateLimit } from "./ratelimit";
+import { requireEnabled } from "./runtime";
 
 const livekitUrl = defineString("LIVEKIT_URL", { default: "" });
 const livekitApiKey = defineSecret("LIVEKIT_API_KEY");
@@ -33,10 +36,16 @@ const livekitApiSecret = defineSecret("LIVEKIT_API_SECRET");
 const TOKEN_GRACE_SECONDS = 90;
 
 export const getCallMediaToken = onCall(
-  { secrets: [livekitApiKey, livekitApiSecret] },
+  callable(20, { secrets: [livekitApiKey, livekitApiSecret] }),
   async (request) => {
     const uid = requireAuth(request);
     const sessionId = requireString(request.data?.sessionId, "sessionId");
+
+    // Token minting is a cost lever (function compute + LiveKit on join):
+    // kill-switchable and rate-limited. Ten a minute covers aggressive
+    // reconnect loops; scripts minting tokens in bulk are refused.
+    await requireEnabled("getCallMediaToken", "callsEnabled");
+    await enforceRateLimit(uid, "getCallMediaToken");
 
     const session = await db().collection("callSessions").doc(sessionId).get();
     assertParticipant(session, uid);

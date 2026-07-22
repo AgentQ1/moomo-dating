@@ -26,6 +26,20 @@ export const SPEED_CALL_SECONDS = 180;
  */
 export const QUEUE_ENTRY_TTL_MS = 40 * 1000;
 
+/**
+ * The presence bucket size. Must equal the client's
+ * `PresenceHeartbeat.bucketInterval` (600s) and the rules'
+ * `activityBucketIsHonest` modulus (600,000 ms) — the three move together.
+ */
+export const ACTIVITY_BUCKET_MS = 10 * 60 * 1000;
+
+/** `now` floored to the bucket — the same value an honest client writes. */
+export function activityBucketFloor(now: Timestamp): Timestamp {
+  return Timestamp.fromMillis(
+    Math.floor(now.toMillis() / ACTIVITY_BUCKET_MS) * ACTIVITY_BUCKET_MS
+  );
+}
+
 /** Boosts granted per 24h window. Mirrors the free-beta client copy. */
 export const BOOST_DAILY_ALLOWANCE = 3;
 export const BOOST_DURATION_MS = 30 * 60 * 1000;
@@ -43,6 +57,17 @@ export const REPORT_REASONS = [
   "spam",
   "underage",
   "other",
+] as const;
+
+/** Must match `UnmatchReason` raw values in app/Moomo/Models/Safety.swift. */
+export const UNMATCH_REASONS = [
+  "no_reason",
+  "not_interested",
+  "fake_spam_scammer",
+  "inappropriate_content",
+  "underage",
+  "off_app_behavior",
+  "someone_in_danger",
 ] as const;
 
 export const CALL_MODES = ["voice", "video"] as const;

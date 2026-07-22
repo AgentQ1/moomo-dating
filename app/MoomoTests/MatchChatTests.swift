@@ -158,7 +158,9 @@ final class MatchChatTests: XCTestCase {
         let world = makeWorld()
         let match = try await makeMatch(world)
 
-        let model = ChatDetailModel(conversationID: match.conversationID, service: world.chat)
+        let model = ChatDetailModel(
+            conversationID: match.conversationID, service: world.chat, safety: world.safety
+        )
         await settle()
         XCTAssertFalse(model.isUnavailable)
 
@@ -172,7 +174,9 @@ final class MatchChatTests: XCTestCase {
     func testFailedSendPreservesTheDraftAndSaysSo() async throws {
         let world = makeWorld()
         // A conversation that never existed: every send fails.
-        let model = ChatDetailModel(conversationID: "ghost", service: world.chat)
+        let model = ChatDetailModel(
+            conversationID: "ghost", service: world.chat, safety: world.safety
+        )
         model.draft = "hello there"
 
         await model.send()

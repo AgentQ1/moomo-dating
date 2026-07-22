@@ -4,7 +4,7 @@
  * match + conversation + notifications. Plus the safety property the queue
  * must never violate: blocked pairs are not paired, in either direction.
  */
-import { test, describe, beforeEach } from 'node:test';
+import { test, describe, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fftModule from 'firebase-functions-test';
 
@@ -16,6 +16,10 @@ if (!process.env.FIRESTORE_EMULATOR_HOST) {
 
 const PROJECT_ID = 'moomo-functions-test-matchmaking';
 process.env.GCLOUD_PROJECT = PROJECT_ID;
+// One shard = the old deterministic FIFO. The sharded-pool describe below
+// raises this on purpose; everything else in this file depends on strict
+// oldest-first ordering to keep its assertions exact.
+process.env.QUEUE_SHARD_COUNT = '1';
 
 const fftFactory = fftModule.default ?? fftModule;
 const fft = fftFactory({ projectId: PROJECT_ID });
@@ -351,12 +355,11 @@ describe('stale queue hygiene — abandoned entries never become ghost calls', (
     assert.equal((await db.collection('callSessions').get()).size, 0, 'no ghost session exists');
   });
 
-  test('join sweeps entries past twice the TTL and withdraws their advertisement', async () => {
+  test('the scheduled sweep removes entries past twice the TTL and withdraws their advertisement', async () => {
     await seedProfiles();
     await seedAbandonedEntry(ALICE, 120);
 
-    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
-    assert.equal(bobJoin.status, 'waiting');
+    await functions.sweepMatchmakingQueue.run({});
 
     assert.ok(!(await db.doc(`matchmakingQueue/${ALICE}`).get()).exists, 'abandoned entry swept');
     assert.equal(
@@ -364,23 +367,79 @@ describe('stale queue hygiene — abandoned entries never become ghost calls', (
       false,
       'Discover must stop featuring someone who is not really waiting'
     );
-    // The sweep touched only the stale entry — the joiner is genuinely waiting.
-    assert.equal((await db.doc(`matchmakingQueue/${BOB}`).get()).get('status'), 'waiting');
-    assert.equal((await db.doc(`publicProfiles/${BOB}`).get()).get('wantsToTalk'), true);
   });
 
-  test('leave sweeps other users\' abandoned entries too', async () => {
+  test('the scheduled sweep leaves genuinely waiting entries alone', async () => {
     await seedProfiles();
     await joinQueue(asUser(BOB, { mode: 'voice' }));
     await seedAbandonedEntry(ALICE, 120);
 
-    await leaveQueue(asUser(BOB));
+    await functions.sweepMatchmakingQueue.run({});
 
     assert.ok(!(await db.doc(`matchmakingQueue/${ALICE}`).get()).exists);
     assert.equal((await db.doc(`publicProfiles/${ALICE}`).get()).get('wantsToTalk'), false);
+    // The joiner is genuinely waiting and must survive the sweep.
+    assert.equal((await db.doc(`matchmakingQueue/${BOB}`).get()).get('status'), 'waiting');
+    assert.equal((await db.doc(`publicProfiles/${BOB}`).get()).get('wantsToTalk'), true);
   });
 
-  test('a user who rejoins over their own abandoned entry survives the sweep they trigger', async () => {
+  test('join no longer sweeps — hygiene is the cron\'s job, not the hot path\'s (P1-2)', async () => {
+    await seedProfiles();
+    await seedAbandonedEntry(ALICE, 120);
+
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    assert.equal(bobJoin.status, 'waiting', 'a 120s-old entry is still never a partner');
+
+    // The stale entry remains until the scheduled sweep — the join-time
+    // collection-scan transaction was the FIFO-contention amplifier the
+    // audit flagged, and it must not quietly come back.
+    assert.ok((await db.doc(`matchmakingQueue/${ALICE}`).get()).exists);
+  });
+
+  test('the sweep never touches matched entries of a call that may still be live', async () => {
+    await seedProfiles();
+    await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const paired = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    assert.equal(paired.status, 'matched');
+
+    // 100s into a 180s call: past the waiting-stale threshold (80s), but the
+    // call clock is still running — sweeping now would let a duplicate join
+    // double-book someone who is mid-call.
+    for (const uid of [ALICE, BOB]) {
+      await db.doc(`matchmakingQueue/${uid}`).update({ createdAt: secondsAgo(100) });
+    }
+    await functions.sweepMatchmakingQueue.run({});
+    assert.ok((await db.doc(`matchmakingQueue/${ALICE}`).get()).exists, 'live-call entry survives');
+    assert.ok((await db.doc(`matchmakingQueue/${BOB}`).get()).exists);
+
+    // Past the call clock + reconnect grace (270s), the entries are litter.
+    for (const uid of [ALICE, BOB]) {
+      await db.doc(`matchmakingQueue/${uid}`).update({ createdAt: secondsAgo(300) });
+    }
+    await functions.sweepMatchmakingQueue.run({});
+    assert.ok(!(await db.doc(`matchmakingQueue/${ALICE}`).get()).exists, 'expired entry swept');
+    assert.ok(!(await db.doc(`matchmakingQueue/${BOB}`).get()).exists);
+  });
+
+  test('dead-client entries cannot bury a fresh waiter under the candidate window', async () => {
+    await seedProfiles();
+    // Ten abandoned entries aged past the TTL (40s) but under the sweep
+    // threshold (80s) — the sweep cannot help, so the pairing query itself
+    // must exclude them or they consume the whole limit-10 window.
+    for (let i = 0; i < 10; i += 1) {
+      await seedAbandonedEntry(`dead-${i}`, 50);
+      await db.doc(`matchmakingQueue/dead-${i}`).update({ shard: 0 });
+    }
+    const aliceJoin = await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    assert.equal(aliceJoin.status, 'waiting', 'Alice waits — the dead are not partners');
+
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+
+    assert.equal(bobJoin.status, 'matched', 'the fresh waiter is found behind the dead window');
+    assert.ok(bobJoin.session.participants[ALICE]);
+  });
+
+  test('a user who rejoins over their own abandoned entry gets a fresh waiting entry', async () => {
     await seedProfiles();
     await seedAbandonedEntry(ALICE, 120);
 
@@ -396,8 +455,148 @@ describe('stale queue hygiene — abandoned entries never become ghost calls', (
     assert.equal(
       (await db.doc(`publicProfiles/${ALICE}`).get()).get('wantsToTalk'),
       true,
-      'the rejoin is advertised — the sweep must not undo it'
+      'the rejoin is advertised'
     );
+  });
+});
+
+describe('join idempotency — a duplicate join returns the existing live session', () => {
+  beforeEach(clearFirestore);
+
+  test('a retried join after pairing returns the same session, never a second one', async () => {
+    await seedProfiles();
+    await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const first = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    assert.equal(first.status, 'matched');
+
+    // The client's network dropped the response; it retries the call.
+    const retry = await joinQueue(asUser(BOB, { mode: 'voice' }));
+
+    assert.equal(retry.status, 'matched');
+    assert.equal(retry.session.sessionId, first.session.sessionId, 'same session, not a new pairing');
+    assert.equal((await db.collection('callSessions').get()).size, 1, 'exactly one session exists');
+    // The peer's entry still points at the same session.
+    assert.equal((await db.doc(`matchmakingQueue/${ALICE}`).get()).get('sessionId'), first.session.sessionId);
+  });
+
+  test('after the call ends, a rejoin is a genuine new join', async () => {
+    await seedProfiles();
+    await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const first = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await endCall(asUser(BOB, { sessionId: first.session.sessionId, reason: 'ended' }));
+
+    const rejoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+
+    assert.equal(rejoin.status, 'waiting', 'an ended session is not resurrected');
+    assert.equal((await db.doc(`matchmakingQueue/${BOB}`).get()).get('status'), 'waiting');
+  });
+
+  test('a join for a DIFFERENT mode never returns the live session of the old one', async () => {
+    await seedProfiles();
+    await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const voice = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    assert.equal(voice.status, 'matched');
+
+    // The client labels a call with the mode it requested — handing a video
+    // join a live voice session would render the wrong call entirely.
+    const videoJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
+
+    assert.equal(videoJoin.status, 'waiting', 'a video join is a new join, not the voice session');
+  });
+
+  test('enqueueing stamps the public activityBucket server-side (feed visibility)', async () => {
+    await seedProfiles();
+    await joinQueue(asUser(ALICE, { mode: 'voice' }));
+
+    const profile = await db.doc(`publicProfiles/${ALICE}`).get();
+    const bucket = profile.get('activityBucket');
+    assert.ok(bucket, 'a waiting user is visible to the bucketed feed queries');
+    assert.equal(bucket.toMillis() % 600_000, 0, 'aligned exactly as the rules demand');
+    assert.ok(bucket.toMillis() <= Date.now(), 'never from the future');
+  });
+});
+
+describe('sharded waiting pool — contention relief must never hide waiting users', () => {
+  beforeEach(clearFirestore);
+
+  const SHARDS = 4;
+  before(() => {
+    process.env.QUEUE_SHARD_COUNT = String(SHARDS);
+  });
+  after(() => {
+    process.env.QUEUE_SHARD_COUNT = '1';
+  });
+
+  /** A waiting entry as joinMatchmakingQueue writes it, pinned to a shard. */
+  async function seedWaiting(uid, shard) {
+    const now = Timestamp.now();
+    await db.doc(`matchmakingQueue/${uid}`).set({
+      uid,
+      mode: 'voice',
+      status: 'waiting',
+      shard,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  test('a waiter is found whatever shard they landed in', async () => {
+    // One waiter, once per shard: the scan must fall through empty shards
+    // and reach them every time.
+    for (let shard = 0; shard < SHARDS; shard += 1) {
+      await clearFirestore();
+      await seedProfiles();
+      await seedWaiting(ALICE, shard);
+
+      const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+
+      assert.equal(bobJoin.status, 'matched', `waiter in shard ${shard} must be found`);
+      assert.ok(bobJoin.session.participants[ALICE]);
+    }
+  });
+
+  test('concurrent joins never double-book anyone (duplicate prevention)', async () => {
+    const users = ['con-a', 'con-b', 'con-c', 'con-d', 'con-e', 'con-f'];
+    const now = Timestamp.now();
+    for (const uid of users) {
+      await db.doc(`publicProfiles/${uid}`).set({ displayName: uid, updatedAt: now });
+    }
+
+    const results = await Promise.all(
+      users.map((uid) => joinQueue(asUser(uid, { mode: 'voice' })))
+    );
+
+    // Every call resolved to a definite state.
+    for (const result of results) {
+      assert.ok(['matched', 'waiting'].includes(result.status));
+    }
+
+    // No user appears in more than one session, and every session has
+    // exactly two distinct participants — the invariant the pairing
+    // transaction exists to protect, now under real concurrency.
+    const sessions = await db.collection('callSessions').get();
+    const seen = new Map();
+    for (const session of sessions.docs) {
+      const ids = session.get('participantIds');
+      assert.equal(ids.length, 2);
+      assert.notEqual(ids[0], ids[1]);
+      for (const uid of ids) {
+        assert.ok(!seen.has(uid), `${uid} was paired into two sessions`);
+        seen.set(uid, session.id);
+      }
+    }
+
+    // Everyone is accounted for: in exactly one session, or genuinely waiting.
+    for (const uid of users) {
+      const entry = await db.doc(`matchmakingQueue/${uid}`).get();
+      assert.ok(entry.exists, `${uid} has a queue entry`);
+      if (entry.get('status') === 'matched') {
+        assert.equal(seen.get(uid), entry.get('sessionId'));
+      } else {
+        assert.equal(entry.get('status'), 'waiting');
+        assert.ok(!seen.has(uid), `${uid} is waiting yet also in a session`);
+      }
+    }
   });
 });
 

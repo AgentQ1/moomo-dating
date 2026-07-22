@@ -33,6 +33,43 @@ enum ReportReason: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Why a match is being unmatched. Private to the unmatching user — the other
+/// person only sees the match disappear. Raw values are the wire format and
+/// must match the `UNMATCH_REASONS` whitelist in `backend/functions/src/shared.ts`.
+enum UnmatchReason: String, CaseIterable, Identifiable, Sendable {
+    case noReason = "no_reason"
+    case notInterested = "not_interested"
+    case fakeSpamScammer = "fake_spam_scammer"
+    case inappropriateContent = "inappropriate_content"
+    case underage
+    case offAppBehavior = "off_app_behavior"
+    case someoneInDanger = "someone_in_danger"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .noReason: "No reason"
+        case .notInterested: "I'm not interested in this person"
+        case .fakeSpamScammer: "Profile is fake, spam, or scammer"
+        case .inappropriateContent: "Inappropriate content"
+        case .underage: "Underage or minor"
+        case .offAppBehavior: "Off-app behavior"
+        case .someoneInDanger: "Someone is in danger"
+        }
+    }
+
+    /// Reasons that describe harm rather than disinterest. The unmatch sheet
+    /// nudges blocking for these; moderation reviews them server-side.
+    var isSerious: Bool {
+        switch self {
+        case .noReason, .notInterested: false
+        case .fakeSpamScammer, .inappropriateContent, .underage,
+             .offAppBehavior, .someoneInDanger: true
+        }
+    }
+}
+
 /// A report as submitted. Write-only from the client's point of view —
 /// moderation reads it, the reporter cannot, matching the Firestore rules.
 struct Report: Identifiable, Equatable, Sendable {

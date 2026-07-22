@@ -150,17 +150,20 @@ service cloud.firestore {
     // ---------------------------------------------------------------
     // publicProfiles/{uid} — the projection other users may see.
     //
-    // Open to signed-in users: Discover is served from here now, and blocks
-    // exist to gate what the client renders. Remaining hardening is Phase 5:
-    // App Check on reads and a backend-composed feed (server-side block
-    // filtering, rate limits). Until then any authenticated account can read
-    // public projections — which contain only what Discover shows.
+    // Single-document reads stay open to signed-in users (a profile card
+    // for someone you matched or talked with). LIST IS DENIED OUTRIGHT:
+    // browsing happens through the getDiscoveryFeed callable, which is
+    // bounded, block-filtered, compatibility-filtered, rate-limited, and
+    // cursor-free — so an authenticated script can no longer page the
+    // whole collection and dump every profile (audit P0-3). Document ids
+    // are Firebase uids, which are not enumerable, so get-by-id does not
+    // reopen the scrape.
     // ---------------------------------------------------------------
     match /publicProfiles/{uid} {
       allow get: if isSignedIn();
-      // Anti-scrape brake: reads must come in app-sized pages. Discover asks
-      // for 25; nothing legitimate asks for more than 50 at once.
-      allow list: if isSignedIn() && request.query.limit <= 50;
+      // No client lists, at any page size. Discover is served by the
+      // getDiscoveryFeed callable (Admin SDK, which bypasses rules).
+      allow list: if false;
 
       // The EXACT public schema. A whitelist rather than a blacklist of
       // private fields: anything not listed — a privileged flag, a private
@@ -172,8 +175,8 @@ service cloud.firestore {
       function publicSchemaOnly(data) {
         return data.keys().hasOnly([
           'uid', 'displayName', 'age', 'city', 'gender', 'interestedIn',
-          'photoPaths', 'occupation', 'lastActiveAt', 'updatedAt',
-          'wantsToTalk', 'boostedUntil'
+          'photoPaths', 'occupation', 'lastActiveAt', 'activityBucket',
+          'updatedAt', 'wantsToTalk', 'boostedUntil'
         ]);
       }
 
@@ -223,6 +226,23 @@ service cloud.firestore {
                || data.lastActiveAt == request.time;
       }
 
+      // The feed's coarse activity stamp: lastActiveAt quantized to a
+      // 10-minute bucket (600,000 ms) by the client heartbeat. Quantized so
+      // the ordering index isn't a monotonically increasing hotspot (audit
+      // P1-1), honest so idle clients can't sit at the top of Discover:
+      // it must be bucket-aligned and within clock-skew distance of "now"
+      // (10 min ahead, 20 min behind — a bucket floor is up to 10 min old
+      // before skew).
+      function activityBucketIsHonest(data, before) {
+        return !data.diff(before).affectedKeys().hasAny(['activityBucket'])
+               || (data.activityBucket is timestamp
+                   && data.activityBucket.toMillis() % 600000 == 0
+                   && data.activityBucket.toMillis()
+                        <= request.time.toMillis() + 600000
+                   && data.activityBucket.toMillis()
+                        > request.time.toMillis() - 1200000);
+      }
+
       allow create, update: if isSelf(uid)
                             && hasServerUpdatedAt()
                             // The document is keyed by its owner and must say so.
@@ -230,6 +250,10 @@ service cloud.firestore {
                             && publicSchemaOnly(request.resource.data)
                             && publicFieldsValid(request.resource.data)
                             && presenceIsHonest(
+                                 request.resource.data,
+                                 resource == null ? {} : resource.data
+                               )
+                            && activityBucketIsHonest(
                                  request.resource.data,
                                  resource == null ? {} : resource.data
                                )
@@ -309,16 +333,44 @@ service cloud.firestore {
       allow get, list: if isParticipant();
       allow create, delete: if false; // server-owned
 
-      // The one client-writable thing on a conversation: marking YOUR OWN
-      // unread counter read. Nothing else may change — not the preview, not
-      // the participants, not the other person's counter.
+      // The client-writable slice of a conversation — three per-user maps,
+      // each touching ONLY the caller's own key:
+      //  - unreadCounts.{uid}: zeroing your own unread counter (markRead);
+      //  - hiddenBy.{uid}: hiding the thread from your own list;
+      //  - metBy.{uid}: your private "we met in person" answer.
+      // Nothing else may change — not the preview, not the participants,
+      // never the other person's keys.
+      function unreadCountsOK() {
+        return !request.resource.data.diff(resource.data)
+                    .affectedKeys().hasAny(['unreadCounts'])
+               || (request.resource.data.unreadCounts
+                     .diff(resource.data.get('unreadCounts', {}))
+                     .affectedKeys().hasOnly([request.auth.uid])
+                   && request.resource.data.unreadCounts[request.auth.uid] == 0);
+      }
+      function hiddenByOK() {
+        return !request.resource.data.diff(resource.data)
+                    .affectedKeys().hasAny(['hiddenBy'])
+               || (request.resource.data.hiddenBy
+                     .diff(resource.data.get('hiddenBy', {}))
+                     .affectedKeys().hasOnly([request.auth.uid])
+                   && request.resource.data.hiddenBy[request.auth.uid] is bool);
+      }
+      function metByOK() {
+        return !request.resource.data.diff(resource.data)
+                    .affectedKeys().hasAny(['metBy'])
+               || (request.resource.data.metBy
+                     .diff(resource.data.get('metBy', {}))
+                     .affectedKeys().hasOnly([request.auth.uid])
+                   && request.resource.data.metBy[request.auth.uid] is bool);
+      }
+
       allow update: if isParticipant()
                     && request.resource.data.diff(resource.data)
-                         .affectedKeys().hasOnly(['unreadCounts'])
-                    && request.resource.data.unreadCounts
-                         .diff(resource.data.get('unreadCounts', {}))
-                         .affectedKeys().hasOnly([request.auth.uid])
-                    && request.resource.data.unreadCounts[request.auth.uid] == 0;
+                         .affectedKeys().hasOnly(['unreadCounts', 'hiddenBy', 'metBy'])
+                    && unreadCountsOK()
+                    && hiddenByOK()
+                    && metByOK();
 
       // Participants of the parent conversation may read the thread and
       // append messages as themselves. Nothing may be edited or deleted
@@ -384,6 +436,16 @@ service cloud.firestore {
       allow get, list: if isSelf(uid);
       allow create, update: if false; // blockUser callable only
       allow delete: if isSelf(uid);   // unblock
+    }
+
+    // ---------------------------------------------------------------
+    // unmatches/{unmatchId} — private unmatch reasons, entirely
+    // server-owned. Written by the unmatchUser callable; only moderation
+    // (Admin SDK) reads them. Nobody may learn why they were unmatched —
+    // or that a reason exists at all.
+    // ---------------------------------------------------------------
+    match /unmatches/{unmatchId} {
+      allow read, write: if false; // unmatchUser callable + Admin SDK only
     }
 
     // ---------------------------------------------------------------

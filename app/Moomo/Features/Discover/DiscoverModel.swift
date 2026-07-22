@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import os
 
 /// Discover's state. Owns no profile data — that lives in `SessionStore`.
 @MainActor
@@ -12,6 +13,8 @@ final class DiscoverModel: ObservableObject {
     }
 
     @Published private(set) var phase: Phase = .loading
+
+    private static let log = Logger(subsystem: "com.moomo.dating", category: "discovery")
 
     private let service: DiscoveryService
     private var loadTask: Task<Void, Never>?
@@ -47,7 +50,12 @@ final class DiscoverModel: ObservableObject {
                 // Superseded; the newer load owns the phase.
             } catch {
                 guard !Task.isCancelled else { return }
-                phase = .failed(.offline)
+                // Never rename an unknown failure "offline": an App Check
+                // rejection or a rules/config error shown as "check your
+                // connection" is a lie that hides the real fault. Classify,
+                // and keep the raw error in the log.
+                Self.log.error("loadDiscovery failed: \(String(describing: error), privacy: .public)")
+                phase = .failed(DiscoveryErrorClassifier.classify(error))
             }
         }
         loadTask = task

@@ -28,6 +28,23 @@ protocol SafetyService: Sendable {
     /// Reports submitted this session. Exposed for tests and the moderation
     /// hand-off; not shown in the UI (reports are write-only for users).
     func reports() async -> [Report]
+
+    /// Ends the match with someone: the match and its conversation are removed
+    /// for both people, and the reason is stored privately — the other person
+    /// only sees the match disappear. Unlike a block, an unmatch does not
+    /// prevent meeting again through a future call.
+    ///
+    /// Throws when the unmatch could not be recorded — the row must not
+    /// vanish from the list if the match still exists.
+    func unmatch(_ candidate: DiscoveryCandidate, reason: UnmatchReason) async throws
+}
+
+/// A recorded unmatch. Mock-only bookkeeping (the backend keeps the real,
+/// server-owned copy) so tests can prove the reason was stored.
+struct UnmatchRecord: Equatable, Sendable {
+    var userID: String
+    var reason: UnmatchReason
+    var unmatchedAt: Date
 }
 
 /// In-memory safety state.
@@ -35,13 +52,20 @@ final class MockSafetyService: SafetyService, @unchecked Sendable {
 
     private let blockedBroadcaster = StreamBroadcaster<[BlockedUser]>([])
     private let reportsBroadcaster = StreamBroadcaster<[Report]>([])
+    private let unmatchesBroadcaster = StreamBroadcaster<[UnmatchRecord]>([])
 
     /// The ripple a block causes elsewhere (drop matches, drop conversations),
     /// wired by `AppServices` the way backend triggers would be.
     private let onBlock: @Sendable (String) async -> Void
+    /// The unmatch cascade: same teardown as a block, without the block.
+    private let onUnmatch: @Sendable (String) async -> Void
 
-    init(onBlock: @escaping @Sendable (String) async -> Void = { _ in }) {
+    init(
+        onBlock: @escaping @Sendable (String) async -> Void = { _ in },
+        onUnmatch: @escaping @Sendable (String) async -> Void = { _ in }
+    ) {
         self.onBlock = onBlock
+        self.onUnmatch = onUnmatch
     }
 
     var blockedUsersStream: AsyncStream<[BlockedUser]> { blockedBroadcaster.stream() }
@@ -89,4 +113,18 @@ final class MockSafetyService: SafetyService, @unchecked Sendable {
     }
 
     func reports() async -> [Report] { reportsBroadcaster.value }
+
+    func unmatch(_ candidate: DiscoveryCandidate, reason: UnmatchReason) async throws {
+        unmatchesBroadcaster.update {
+            $0.insert(
+                UnmatchRecord(userID: candidate.id, reason: reason, unmatchedAt: Date()),
+                at: 0
+            )
+        }
+        await onUnmatch(candidate.id)
+    }
+
+    /// Unmatches recorded this session, for tests — the real store is
+    /// server-owned and never readable from the client.
+    func unmatches() async -> [UnmatchRecord] { unmatchesBroadcaster.value }
 }

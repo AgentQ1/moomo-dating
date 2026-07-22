@@ -6,10 +6,14 @@
  */
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { FieldValue } from "firebase-admin/firestore";
+import { trigger } from "./options";
 import { db } from "./shared";
 
 export const onMessageCreated = onDocumentCreated(
-  "conversations/{conversationId}/messages/{messageId}",
+  {
+    document: "conversations/{conversationId}/messages/{messageId}",
+    ...trigger(20),
+  },
   async (event) => {
     const message = event.data?.data();
     if (!message) return;

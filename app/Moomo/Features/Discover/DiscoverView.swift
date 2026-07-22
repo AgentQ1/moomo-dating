@@ -70,8 +70,8 @@ struct DiscoverView: View {
 
         case .failed(let error):
             DiscoverMessageCard(
-                icon: error == .offline ? "wifi.slash" : "person.2.slash",
-                title: error == .offline ? "You're offline" : "No one's around",
+                icon: error.cardIcon,
+                title: error.cardTitle,
                 message: error.errorDescription ?? "",
                 actionTitle: "Try again"
             ) {
@@ -262,5 +262,32 @@ private struct TopActionButton: View {
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Card presentation per failure state. View-layer on purpose: the error
+/// enum owns the words (errorDescription), the view owns the pictures — and
+/// only genuine connectivity loss gets the wifi-slash "You're offline" card.
+private extension DiscoveryError {
+    var cardIcon: String {
+        switch self {
+        case .offline: "wifi.slash"
+        case .noUsersAvailable: "person.2.slash"
+        case .rateLimited: "hourglass"
+        case .sessionExpired: "person.crop.circle.badge.exclamationmark"
+        case .loadFailed: "exclamationmark.bubble"
+        }
+    }
+
+    var cardTitle: String {
+        switch self {
+        case .offline: "You're offline"
+        case .noUsersAvailable: "No one's around"
+        case .rateLimited: "One moment"
+        // The auth listener signs the dead session out and routes to
+        // welcome on its own; this card covers the beat in between.
+        case .sessionExpired: "Signed out"
+        case .loadFailed: "Something went wrong"
+        }
     }
 }

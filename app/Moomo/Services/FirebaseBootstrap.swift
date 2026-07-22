@@ -52,36 +52,82 @@ enum FirebaseBootstrap {
 
         // App Check's factory must be set BEFORE configure() or the first
         // token fetch races the default provider.
-        configureAppCheck()
-        FirebaseApp.configure()
+        runConfigurationSteps(
+            installAppCheckFactory: { configureAppCheck() },
+            configureFirebase: { FirebaseApp.configure() }
+        )
         hasConfigured = true
+
+        #if DEBUG
+        logAppCheckDebugToken()
+        #endif
         #endif
     }
 
-    /// Opt-in switch for App Check: `MOOMO_ENABLE_APP_CHECK=1` in the
-    /// environment, or `-MOOMO_ENABLE_APP_CHECK` as a launch argument.
-    private static var isAppCheckEnabled: Bool {
-        ProcessInfo.processInfo.environment["MOOMO_ENABLE_APP_CHECK"] == "1"
-            || ProcessInfo.processInfo.arguments.contains("-MOOMO_ENABLE_APP_CHECK")
+    /// The bootstrap sequence as one path with the two steps injectable, so
+    /// a wiring test can pin the ordering App Check depends on: the factory
+    /// installed strictly before `FirebaseApp.configure()`. Installed after,
+    /// it loses the race for the first token fetch and every callable goes
+    /// out unattested — which an enforcing backend refuses wholesale.
+    static func runConfigurationSteps(
+        installAppCheckFactory: () -> Void,
+        configureFirebase: () -> Void
+    ) {
+        installAppCheckFactory()
+        configureFirebase()
+    }
+
+    #if DEBUG
+    /// Prints this install's App Check debug token, loudly, on every DEBUG
+    /// launch. DEBUG builds attest with the debug provider — simulators AND
+    /// devices — and the backend enforces App Check on every callable, so
+    /// an install whose token isn't registered is refused everything with a
+    /// bare `unauthenticated`. The token to register belongs one copy-paste
+    /// away, not buried in the SDK's own logging.
+    private static func logAppCheckDebugToken() {
+        #if canImport(FirebaseAppCheck) && canImport(FirebaseCore)
+        guard !isAppCheckDisabled,
+              let app = FirebaseApp.app(),
+              let provider = AppCheckDebugProvider(app: app) else { return }
+        print("""
+        ─────────────────────────────────────────────────────────────────
+        [Moomo] App Check DEBUG token for this install:
+        [Moomo]   \(provider.currentDebugToken())
+        [Moomo] Register it once: Firebase console → moomo-c7a37 →
+        [Moomo]   App Check → Apps → Moomo (iOS) → ⋮ → Manage debug tokens.
+        [Moomo] Unregistered, every callable answers 'unauthenticated'.
+        ─────────────────────────────────────────────────────────────────
+        """)
+        #endif
+    }
+    #endif
+
+    /// Opt-OUT switch for App Check: `MOOMO_DISABLE_APP_CHECK=1` in the
+    /// environment, or `-MOOMO_DISABLE_APP_CHECK` as a launch argument.
+    /// For local development against a project whose App Check API is off —
+    /// a provider with the API disabled just logs repeated 403
+    /// SERVICE_DISABLED token failures.
+    private static var isAppCheckDisabled: Bool {
+        ProcessInfo.processInfo.environment["MOOMO_DISABLE_APP_CHECK"] == "1"
+            || ProcessInfo.processInfo.arguments.contains("-MOOMO_DISABLE_APP_CHECK")
     }
 
     /// App Check: App Attest on devices, the debug provider in DEBUG builds
     /// (simulators and CI register debug tokens in the Firebase console).
     ///
-    /// OFF unless explicitly enabled via `MOOMO_ENABLE_APP_CHECK`. The App
-    /// Check API (`firebaseappcheck.googleapis.com`) is currently disabled for
-    /// this project, so installing a provider factory just makes every token
-    /// fetch fail with a repeated 403 SERVICE_DISABLED. Before turning the
-    /// flag on: enable the Firebase App Check API in the console and register
-    /// this build's debug token, or the same 403s come back.
+    /// ON by default (production-readiness audit P0-2): the backend now sets
+    /// `enforceAppCheck: true` on every callable, so a client without a
+    /// provider is locked out the moment that backend deploys. Deploy order
+    /// and the console steps (enable the App Check API, register App Attest
+    /// + each simulator's debug token, watch metrics before deploying
+    /// enforcement) live in `backend/README.md` "App Check".
     ///
-    /// This attests the APP; enforcement is server-side and currently OFF
-    /// (`enforceAppCheck` per callable, `backend/README.md`) until the app is
-    /// registered in the App Check console — flipping enforcement first would
-    /// lock every real user out.
+    /// This attests the APP; token fetch failures are non-fatal client-side
+    /// (requests simply go out without a token — and are then refused by an
+    /// enforcing backend).
     private static func configureAppCheck() {
         #if canImport(FirebaseAppCheck)
-        guard isAppCheckEnabled else { return }
+        guard !isAppCheckDisabled else { return }
         AppCheck.setAppCheckProviderFactory(MoomoAppCheckProviderFactory())
         #endif
     }

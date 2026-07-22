@@ -16,6 +16,7 @@
  */
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { Timestamp } from "firebase-admin/firestore";
+import { callable } from "./options";
 import {
   db,
   requireAuth,
@@ -29,6 +30,8 @@ import {
   isBlockedEitherWay,
   ParticipantSummary,
 } from "./shared";
+import { enforceRateLimit } from "./ratelimit";
+import { requireEnabled } from "./runtime";
 
 interface MatchPayload {
   id: string;
@@ -110,13 +113,19 @@ function createConversation(
   });
 }
 
-export const submitCallDecision = onCall(async (request) => {
+export const submitCallDecision = onCall(callable(20), async (request) => {
   const uid = requireAuth(request);
   const sessionId = requireString(request.data?.sessionId, "sessionId");
   const decision = requireString(request.data?.decision, "decision");
   if (decision !== "like" && decision !== "pass") {
     throw new HttpsError("invalid-argument", "Invalid decision.");
   }
+
+  // Maintenance-gated only (no feature flag: refusing decisions while calls
+  // stay up would strand finished calls), and rate-limited — a decision is
+  // the heaviest post-call transaction.
+  await requireEnabled("submitCallDecision");
+  await enforceRateLimit(uid, "submitCallDecision");
 
   // Deliberately NOT gated on session status:
   //  - "ended only" would break the tolerated race with endCallSession (the

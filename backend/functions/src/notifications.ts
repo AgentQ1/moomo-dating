@@ -7,9 +7,10 @@
  * refused. Nothing client-reachable may write into another user's feed.
  */
 import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { callable } from "./options";
 import { db, requireString, writeNotification } from "./shared";
 
-export const sendSystemNotification = onCall(async (request) => {
+export const sendSystemNotification = onCall(callable(5), async (request) => {
   if (request.auth?.token?.admin !== true) {
     throw new HttpsError("permission-denied", "Admin only.");
   }

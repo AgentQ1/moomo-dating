@@ -62,14 +62,133 @@ protocol DiscoveryService: Sendable {
 }
 
 enum DiscoveryError: LocalizedError, Equatable {
+    /// Real connectivity loss, or the backend saying `unavailable` (outage /
+    /// maintenance kill switch). ONLY these may render the offline card —
+    /// an auth, App Check, permission, or config failure dressed up as
+    /// "check your connection" sends the user debugging their Wi-Fi while
+    /// the real fault sits server-side, invisible.
     case offline
     case noUsersAvailable
+    /// The backend's per-user rate limit refused this refresh.
+    case rateLimited
+    /// There is no live Firebase session to speak for: either the gate
+    /// refused to call the backend at all, or the 401 was diagnosed down to
+    /// the missing ID token. The auth listener is what actually signs the
+    /// user out and routes to welcome — this state just says so honestly
+    /// instead of blaming the load.
+    case sessionExpired
+    /// Everything else — auth/App Check rejection, missing function,
+    /// permission, bad config. `code` is the diagnostic name (e.g.
+    /// "unauthenticated"); it is logged, and shown in the card in DEBUG.
+    case loadFailed(code: String)
 
     var errorDescription: String? {
         switch self {
         case .offline: "You're offline. Check your connection."
         case .noUsersAvailable: "No one's around right now."
+        case .rateLimited: "Discover is refreshing too often. Give it a moment and try again."
+        case .sessionExpired: "Your session has expired. Please sign in again."
+        case .loadFailed(let code):
+            #if DEBUG
+            "Discover couldn't load. Please try again in a moment.\n(Debug: \(code))"
+            #else
+            "Discover couldn't load. Please try again in a moment."
+            #endif
         }
+    }
+
+    /// The classifier's untreated 401 verdict. Matching the exact code is
+    /// deliberate: only the bare "unauthenticated" may trigger the auth
+    /// gate's refresh-retry-diagnose pass — an already refined code must
+    /// pass through it untouched, or the retry would loop.
+    var isBareUnauthenticated: Bool {
+        self == .loadFailed(code: DiscoveryErrorClassifier.unauthenticatedCode)
+    }
+}
+
+/// Maps raw transport/Firebase errors onto `DiscoveryError` — one table, so
+/// the "what counts as offline" decision exists exactly once and is unit
+/// tested. Pure Foundation: it works on error domain + code, so tests need
+/// no Firebase and no network.
+enum DiscoveryErrorClassifier {
+
+    /// `FunctionsErrorDomain` in FirebaseFunctions — pinned here so this
+    /// file stays Firebase-free; `DiscoveryErrorMappingTests` asserts the
+    /// two constants never drift apart.
+    static let functionsErrorDomain = "com.firebase.functions"
+    /// `FirestoreErrorDomain` in FirebaseFirestore — same arrangement.
+    static let firestoreErrorDomain = "FIRFirestoreErrorDomain"
+
+    /// gRPC 16 — the backend's 401. One constant because two different
+    /// rejections share it: `enforceAppCheck` refusing a tokenless app, and
+    /// `requireAuth` refusing a missing ID token. `refineUnauthenticated`
+    /// is what tells them apart.
+    static let unauthenticatedCode = "unauthenticated"
+
+    /// gRPC canonical codes, shared by the Functions and Firestore domains.
+    private static let grpcNames: [Int: String] = [
+        1: "cancelled", 2: "unknown", 3: "invalid-argument",
+        4: "deadline-exceeded", 5: "not-found", 6: "already-exists",
+        7: "permission-denied", 8: "resource-exhausted",
+        9: "failed-precondition", 10: "aborted", 11: "out-of-range",
+        12: "unimplemented", 13: "internal", 14: "unavailable",
+        15: "data-loss", 16: unauthenticatedCode,
+    ]
+    private static let grpcUnavailable = 14
+    private static let grpcResourceExhausted = 8
+
+    /// URLSession failures that genuinely mean "the network is not there".
+    /// Deliberately NOT the whole domain: `.cancelled` and friends are not
+    /// connectivity problems and must not render the offline card.
+    private static let urlConnectivityCodes: Set<Int> = [
+        NSURLErrorNotConnectedToInternet,
+        NSURLErrorNetworkConnectionLost,
+        NSURLErrorTimedOut,
+        NSURLErrorCannotFindHost,
+        NSURLErrorCannotConnectToHost,
+        NSURLErrorDNSLookupFailed,
+        NSURLErrorDataNotAllowed,
+        NSURLErrorInternationalRoamingOff,
+    ]
+
+    static func classify(_ error: Error) -> DiscoveryError {
+        if let discovery = error as? DiscoveryError { return discovery }
+        let nsError = error as NSError
+        return classify(domain: nsError.domain, code: nsError.code)
+    }
+
+    static func classify(domain: String, code: Int) -> DiscoveryError {
+        switch domain {
+        case NSURLErrorDomain:
+            return urlConnectivityCodes.contains(code)
+                ? .offline
+                : .loadFailed(code: "url-\(code)")
+        case functionsErrorDomain, firestoreErrorDomain:
+            if code == grpcUnavailable { return .offline }
+            if code == grpcResourceExhausted { return .rateLimited }
+            return .loadFailed(code: grpcNames[code] ?? "grpc-\(code)")
+        default:
+            return .loadFailed(code: "\(domain)#\(code)")
+        }
+    }
+
+    /// Refines the backend's bare 401 into its actual cause, from two facts
+    /// the Firebase layer gathers after the failure. Pure, so the decision
+    /// table is testable without Firebase:
+    ///  - no live session → `.sessionExpired`: the missing credential was
+    ///    the ID token, and the fix is signing in, not retrying;
+    ///  - App Check can't mint a token → the diagnostic names App Check,
+    ///    because the backend enforces it on every callable and refuses
+    ///    tokenless calls with exactly this 401;
+    ///  - both credentials healthy → the bare code survives; the server
+    ///    refused for a reason the client can't see.
+    static func refineUnauthenticated(
+        hasSession: Bool,
+        appCheckProblem: String?
+    ) -> DiscoveryError {
+        guard hasSession else { return .sessionExpired }
+        guard let appCheckProblem else { return .loadFailed(code: unauthenticatedCode) }
+        return .loadFailed(code: "\(unauthenticatedCode) — App Check: \(appCheckProblem)")
     }
 }
 

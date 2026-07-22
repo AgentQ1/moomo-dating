@@ -53,6 +53,9 @@ enum Tab: Int, CaseIterable, Identifiable {
 /// bottom safe area like a system tab bar.
 struct MoomoTabBar: View {
     @Binding var selection: Tab
+    /// Conversations waiting on the local user — the number on the Chat icon.
+    /// Zero hides the badge.
+    var chatBadge: Int = 0
 
     var body: some View {
         HStack(spacing: 0) {
@@ -66,6 +69,12 @@ struct MoomoTabBar: View {
                         Image(systemName: selection == tab ? tab.selectedIcon : tab.icon)
                             .font(.system(size: Size.tabIcon, weight: .regular))
                             .frame(height: 26)
+                            .overlay(alignment: .topTrailing) {
+                                if tab == .chat && chatBadge > 0 {
+                                    TabBadge(count: chatBadge)
+                                        .offset(x: 12, y: -4)
+                                }
+                            }
                         Text(tab.label)
                             .font(Typography.caption)
                     }
@@ -75,6 +84,9 @@ struct MoomoTabBar: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(tab.label)
+                .accessibilityValue(
+                    tab == .chat && chatBadge > 0 ? "\(chatBadge) waiting" : ""
+                )
                 .accessibilityAddTraits(selection == tab ? [.isSelected] : [])
             }
         }
@@ -86,6 +98,23 @@ struct MoomoTabBar: View {
         .shadow(Shadows.tabBar)
         .padding(.horizontal, Space.sm)
         .animation(Motion.tap, value: selection)
+    }
+}
+
+/// The red count bubble on a tab icon, in the notification-dot red the bell
+/// already uses. Caps at 99+ so the pill can't outgrow the icon.
+private struct TabBadge: View {
+    var count: Int
+
+    var body: some View {
+        Text(count > 99 ? "99+" : "\(count)")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .background(Capsule().fill(Palette.notificationDot))
+            .overlay(Capsule().stroke(Palette.surface, lineWidth: 1.5))
+            .accessibilityHidden(true)
     }
 }
 
@@ -128,8 +157,15 @@ struct MainTabView: View {
         _coordinator = StateObject(wrappedValue: CallCoordinator(services: .retained(for: user)))
         _discoverModel = StateObject(wrappedValue: DiscoverModel(service: AppServices.retained(for: user).discovery))
         _callsModel = StateObject(wrappedValue: CallsModel(calls: AppServices.retained(for: user).calls))
-        _matchesModel = StateObject(wrappedValue: MatchesModel(service: AppServices.retained(for: user).matches))
-        _chatListModel = StateObject(wrappedValue: ChatListModel(service: AppServices.retained(for: user).chat))
+        _matchesModel = StateObject(wrappedValue: MatchesModel(
+            service: AppServices.retained(for: user).matches,
+            chat: AppServices.retained(for: user).chat,
+            safety: AppServices.retained(for: user).safety
+        ))
+        _chatListModel = StateObject(wrappedValue: ChatListModel(
+            service: AppServices.retained(for: user).chat,
+            safety: AppServices.retained(for: user).safety
+        ))
         _notificationsModel = StateObject(wrappedValue: NotificationsModel(service: AppServices.retained(for: user).notifications))
         _boostModel = StateObject(wrappedValue: BoostModel(service: AppServices.retained(for: user).boost))
     }
@@ -172,7 +208,8 @@ struct MainTabView: View {
                         .navigationDestination(for: ChatRoute.self) { route in
                             ChatDetailView(
                                 conversationID: route.conversationID,
-                                service: services.chat
+                                service: services.chat,
+                                safety: services.safety
                             )
                         }
                     }
@@ -188,7 +225,7 @@ struct MainTabView: View {
             }
 
             if isTabBarVisible {
-                MoomoTabBar(selection: $selection)
+                MoomoTabBar(selection: $selection, chatBadge: chatListModel.awaitingYouCount)
             }
         }
         .overlay(alignment: .top) {

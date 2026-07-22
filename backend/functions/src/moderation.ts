@@ -12,11 +12,12 @@
  */
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { Timestamp } from "firebase-admin/firestore";
+import { callable } from "./options";
 import { db, requireString } from "./shared";
 
 export const REPORT_RESOLUTIONS = ["resolved", "dismissed"] as const;
 
-export const resolveReport = onCall(async (request) => {
+export const resolveReport = onCall(callable(5), async (request) => {
   if (request.auth?.token?.admin !== true) {
     throw new HttpsError("permission-denied", "Admin only.");
   }
