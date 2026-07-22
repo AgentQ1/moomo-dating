@@ -76,7 +76,7 @@ struct CallFailedView: View {
                 .font(.system(size: 52, weight: .light))
                 .foregroundStyle(Palette.textSecondary)
 
-            Text(failure.isPermissionDenied ? "Moomo can't hear you yet" : "No luck this time")
+            Text(failure.isPermissionDenied ? "Baybe can't hear you yet" : "No luck this time")
                 .font(Typography.heroTitle)
                 .foregroundStyle(Palette.ink)
 

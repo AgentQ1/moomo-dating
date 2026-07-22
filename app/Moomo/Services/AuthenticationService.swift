@@ -29,7 +29,7 @@ enum AuthError: LocalizedError, Equatable {
         case .consentRequired:
             "Please agree to the Privacy Policy and Terms of Service first."
         case .accountDisabled:
-            "This account has been disabled. Contact support@moomo.app."
+            "This account has been disabled. Contact moomolab@gmail.com."
         case .invalidPhoneNumber:
             "That phone number doesn't look right. Check it and try again."
         case .smsSendFailed:

@@ -143,7 +143,7 @@ struct SafetySettingsView: View {
                 )
                 infoRow(
                     icon: "mappin.slash",
-                    text: "Only your city is ever shown. Moomo never collects your exact location."
+                    text: "Only your city is ever shown. Baybe never collects your exact location."
                 )
             }
             .padding(Space.md)
@@ -166,7 +166,7 @@ struct SafetySettingsView: View {
 
     private var contactCard: some View {
         Label(
-            "Need help with something urgent? Email support@moomo.app.",
+            "Need help with something urgent? Email moomolab@gmail.com.",
             systemImage: "envelope.fill"
         )
         .font(Typography.body)

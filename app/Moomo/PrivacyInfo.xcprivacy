@@ -22,9 +22,9 @@
 			</array>
 		</dict>
 		<dict>
-			<!-- Apple/Google sign-in hands us the account email. -->
+			<!-- Date of birth backs the 18+ gate; only the derived age is public. -->
 			<key>NSPrivacyCollectedDataType</key>
-			<string>NSPrivacyCollectedDataTypeEmailAddress</string>
+			<string>NSPrivacyCollectedDataTypeOtherDataTypes</string>
 			<key>NSPrivacyCollectedDataTypeLinked</key>
 			<true/>
 			<key>NSPrivacyCollectedDataTypeTracking</key>

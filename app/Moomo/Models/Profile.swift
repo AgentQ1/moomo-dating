@@ -190,7 +190,7 @@ enum AgeGateFailure: Equatable {
 
     var message: String {
         switch self {
-        case .underage: "You must be 18 or older to use Moomo."
+        case .underage: "You must be 18 or older to use Baybe."
         case .inFuture: "That date is in the future."
         case .implausible: "Please enter a valid date of birth."
         }

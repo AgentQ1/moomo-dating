@@ -1,4 +1,10 @@
 {
+  "hosting": {
+    "site": "baybe-dating",
+    "public": "web",
+    "cleanUrls": true,
+    "ignore": ["firebase.json", "**/.*"]
+  },
   "firestore": {
     "rules": "backend/firestore.rules",
     "indexes": "backend/firestore.indexes.json"

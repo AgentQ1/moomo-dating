@@ -188,7 +188,7 @@ struct ChatListView: View {
             }
             Button("Not yet", role: .cancel) { weMetTarget = nil }
         } message: {
-            Text("Your answer stays private and helps keep Moomo safe.")
+            Text("Your answer stays private and helps keep Baybe safe.")
         }
     }
 

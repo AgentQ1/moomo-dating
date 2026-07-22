@@ -165,7 +165,7 @@ struct LocationStep: View {
             }
 
             Label(
-                "Moomo shows your city, never your exact location.",
+                "Baybe shows your city, never your exact location.",
                 systemImage: "lock.shield.fill"
             )
             .font(Typography.body)

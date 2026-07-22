@@ -8,16 +8,6 @@
   CFBundleURLTypes is exactly that case: it is an array of dictionaries, and the
   INFOPLIST_KEY_* mechanism only carries scalars. There is no
   INFOPLIST_KEY_CFBundleURLTypes, despite what the older setup notes claimed.
-
-  The scheme below is the REVERSED_CLIENT_ID of the iOS OAuth client for
-  moomo-c7a37 (client 998689337464-94t8qa0jq52c8989spb8ijgeelbk7me7). Without
-  it, Google's OAuth callback has nowhere to land and sign-in returns to a blank
-  screen instead of the app.
-
-  It is not a secret — an OAuth client id ships inside every copy of the app
-  binary, and Google documents it as public. It is kept here rather than read
-  from GoogleService-Info.plist because Info.plist must be static at build time,
-  and because that file is gitignored.
 -->
 <plist version="1.0">
 <dict>
@@ -28,11 +18,17 @@
 	  to lose to a build-settings merge or a target misconfiguration.
 	-->
 	<key>NSCameraUsageDescription</key>
-	<string>Moomo uses your camera for 3-minute video speed calls. Your video is never recorded or stored.</string>
+	<string>Baybe uses your camera for 3-minute video speed calls. Your video is never recorded or stored.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Moomo uses your microphone for voice and video speed calls. Your audio is never recorded or stored.</string>
+	<string>Baybe uses your microphone for voice and video speed calls. Your audio is never recorded or stored.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Moomo needs access to your photos so you can add profile pictures and share images with your matches.</string>
+	<string>Baybe uses your photo library so you can choose profile pictures.</string>
+	<!--
+	  Store name is "Baybe" (ASC app 6793496424); the home-screen name must
+	  match it, not the internal target/product name "Moomo".
+	-->
+	<key>CFBundleDisplayName</key>
+	<string>Baybe</string>
 	<!--
 	  Light mode only, for now. The design system (Palette) is a single light
 	  theme; without this lock, system chrome (alerts, sheets, keyboards) went
@@ -62,18 +58,15 @@
 	<array>
 		<string>remote-notification</string>
 	</array>
+	<!--
+	  Only exempt/standard encryption is used (TLS via URLSession/Firebase/gRPC,
+	  WebRTC DTLS-SRTP via LiveKit; no proprietary crypto), so uploads skip the
+	  App Store Connect export-compliance questionnaire.
+	-->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>CFBundleURLTypes</key>
 	<array>
-		<dict>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
-			<key>CFBundleURLName</key>
-			<string>com.moomo.dating.google-signin</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>com.googleusercontent.apps.998689337464-94t8qa0jq52c8989spb8ijgeelbk7me7</string>
-			</array>
-		</dict>
 		<!--
 		  Firebase Phone Auth's reCAPTCHA fallback returns to the app on the
 		  Encoded App ID scheme — GOOGLE_APP_ID 1:998689337464:ios:ca57cd2d8363fae941fd8d

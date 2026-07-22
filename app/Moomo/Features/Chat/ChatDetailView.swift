@@ -234,7 +234,7 @@ struct ChatDetailView: View {
             Button("Yes, we met") { Task { await model.setWeMet(true) } }
             Button("Not yet", role: .cancel) {}
         } message: {
-            Text("Your answer stays private and helps keep Moomo safe.")
+            Text("Your answer stays private and helps keep Baybe safe.")
         }
     }
 

@@ -52,7 +52,7 @@ struct NotificationsStep: View {
                 title: "Chat expiring",
                 detail: "A nudge before a conversation runs out."
             )
-            Text("Moomo asks for permission before sending your first notification — not now. You can change it any time in Settings.")
+            Text("Baybe asks for permission before sending your first notification — not now. You can change it any time in Settings.")
                 .font(Typography.body)
                 .foregroundStyle(Palette.textSecondary)
                 .padding(.top, Space.xs)
@@ -111,7 +111,7 @@ struct SafetyStep: View {
             ExplainerRow(
                 icon: "flag.fill",
                 title: "Report anything off",
-                detail: "If someone makes you uncomfortable, tell us at support@moomo.app. We read every report."
+                detail: "If someone makes you uncomfortable, tell us at moomolab@gmail.com. We read every report."
             )
             ExplainerRow(
                 icon: "eye.slash.fill",

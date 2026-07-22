@@ -50,7 +50,7 @@ struct WelcomeView: View {
         .alert("Trouble logging in?", isPresented: $isShowingLoginHelp) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Make sure you can receive SMS at your number. Still stuck? Email support@moomo.app.")
+            Text("Make sure you can receive SMS at your number. Still stuck? Email moomolab@gmail.com.")
         }
         .onDisappear { phone.cancel() }
         .animation(Motion.transition, value: phone.error)

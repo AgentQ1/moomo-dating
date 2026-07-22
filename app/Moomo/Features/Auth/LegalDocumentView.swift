@@ -18,8 +18,8 @@ enum LegalDocument: String, Identifiable {
     /// App Review rejects dating apps whose policy links 404.
     var url: URL {
         switch self {
-        case .privacy: URL(string: "https://moomo.app/privacy")!
-        case .terms: URL(string: "https://moomo.app/terms")!
+        case .privacy: URL(string: "https://baybe-dating.web.app/privacy")!
+        case .terms: URL(string: "https://baybe-dating.web.app/terms")!
         }
     }
 }
@@ -75,7 +75,7 @@ private extension LegalDocument {
         switch self {
         case .privacy:
             """
-            Moomo is a dating app built around short video and voice calls.
+            Baybe is a dating app built around short video and voice calls.
 
             What we collect
             • Account details you give us: name, date of birth, gender, who \
@@ -83,15 +83,18 @@ private extension LegalDocument {
             • Your phone number. Every account verifies one — it keeps the \
             community real. It is used for verification only and is never \
             shown to other users.
-            • Approximate location — city level only. Moomo never collects, \
+            • Approximate location — city level only. Baybe never collects, \
             stores, or shares your precise location.
-            • Sign-in information (including your email address) from Apple \
-            or Google when you use them to create your account.
             • Messages you send to your matches, and reports you file.
 
             What other users can see
             Your name, age, city, gender, who you'd like to meet, and your \
             photos — what your profile card shows.
+
+            Who processes your data
+            Baybe runs on Google Firebase (Google Cloud): sign-in, profiles, \
+            messages, and photos are stored there. Call audio and video pass \
+            through LiveKit's servers to connect you, and are never recorded.
 
             What we never do
             • We never record your calls.
@@ -104,10 +107,13 @@ private extension LegalDocument {
             conversations, and sign-in details. Safety reports filed by or \
             about an account are retained after deletion so that reported \
             behaviour cannot be erased by deleting the account.
+
+            Contact
+            Questions about privacy: moomolab@gmail.com.
             """
         case .terms:
             """
-            By using Moomo you agree to the following.
+            By using Baybe you agree to the following.
 
             Eligibility
             You must be 18 or older. Accounts found to belong to minors are \
@@ -119,11 +125,11 @@ private extension LegalDocument {
             prohibited and result in removal.
 
             Your account
-            You are responsible for what you post to your profile. Moomo may \
+            You are responsible for what you post to your profile. Baybe may \
             remove content or accounts that break these rules.
 
             Contact
-            Questions about these terms: support@moomo.app.
+            Questions about these terms: moomolab@gmail.com.
             """
         }
     }

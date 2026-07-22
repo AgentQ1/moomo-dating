@@ -230,12 +230,12 @@ final class CallFlowModel: ObservableObject {
         switch mode {
         case .voice:
             CallFailure(
-                message: "Moomo needs microphone access for voice calls. You can turn it on in Settings.",
+                message: "Baybe needs microphone access for voice calls. You can turn it on in Settings.",
                 isPermissionDenied: true
             )
         case .video:
             CallFailure(
-                message: "Moomo needs microphone and camera access for video calls. You can turn them on in Settings.",
+                message: "Baybe needs microphone and camera access for video calls. You can turn them on in Settings.",
                 isPermissionDenied: true
             )
         }

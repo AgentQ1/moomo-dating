@@ -34,7 +34,7 @@ struct MoomoLogo: View {
                 .frame(width: diameter * 0.657, height: diameter * 0.50)
                 .offset(y: -diameter * 0.032)
 
-            Text("moomo")
+            Text("baybe")
                 .font(Typography.wordmark(size: diameter * 0.13))
                 .foregroundStyle(Palette.gold)
                 .tracking(diameter * 0.004)
@@ -42,7 +42,7 @@ struct MoomoLogo: View {
         }
         .frame(width: diameter, height: diameter)
         .accessibilityElement()
-        .accessibilityLabel("Moomo")
+        .accessibilityLabel("Baybe")
     }
 }
 

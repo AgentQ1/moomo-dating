@@ -51,7 +51,7 @@ final class MockNotificationService: NotificationService, @unchecked Sendable {
             AppNotification(
                 id: "seed-welcome",
                 kind: .system,
-                title: "Welcome to Moomo",
+                title: "Welcome to Baybe",
                 body: "Three minutes, one real conversation. Be kind out there.",
                 sentAt: now.addingTimeInterval(-26 * 60 * 60),
                 isRead: true

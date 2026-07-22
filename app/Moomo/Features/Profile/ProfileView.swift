@@ -41,7 +41,7 @@ struct ProfileView: View {
             LegalDocumentView(document: document)
         }
         .confirmationDialog(
-            "Sign out of Moomo?",
+            "Sign out of Baybe?",
             isPresented: $isConfirmingSignOut,
             titleVisibility: .visible
         ) {

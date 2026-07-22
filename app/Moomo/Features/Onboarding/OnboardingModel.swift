@@ -37,15 +37,15 @@ enum OnboardingStep: Int, CaseIterable, Identifiable, Codable {
 
     var subtitle: String {
         switch self {
-        case .name: "This is how you'll appear on Moomo."
+        case .name: "This is how you'll appear on Baybe."
         case .dateOfBirth: "You must be 18 or older. Your birthday stays private — only your age is shown."
         case .gender: "Shown on your profile."
         case .interestedIn: "Pick as many as you like."
-        case .location: "City only. Moomo never shares your exact location."
+        case .location: "City only. Baybe never shares your exact location."
         case .photos: "Add at least one. Your first photo is your main one."
         case .bio: "A sentence or two. What should someone know before they call you?"
         case .interests: "Pick at least three so we can find better matches."
-        case .cameraAndMic: "Moomo is built on live calls, so we need both."
+        case .cameraAndMic: "Baybe is built on live calls, so we need both."
         case .notifications: "So you know when someone wants to talk."
         case .safety: "A few ground rules before your first call."
         case .review: "Here's what others will see."

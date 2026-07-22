@@ -69,8 +69,52 @@ console state is confirmed. Nothing here has been load-tested._
 - [ ] Documented rollback procedure for rules + functions
 - [ ] `firebase use` confirmed `moomo-c7a37` in the deploy runbook (never
       `moomoios-2026`)
-- [ ] LiveKit `LIVEKIT_URL` + secrets set in `moomo-c7a37` (calls fail honestly
-      until then)
+- [x] LiveKit `LIVEKIT_URL` + secrets set in `moomo-c7a37` — _verified
+      2026-07-22: `gcloud secrets list` shows LIVEKIT_API_KEY +
+      LIVEKIT_API_SECRET (created 2026-07-16), `getCallMediaToken` is ACTIVE
+      with LIVEKIT_URL=wss://meow-53wkpwt6.livekit.cloud bound; key validity
+      against the LiveKit project still needs one real device-to-device call_
+
+### App Store submission (added 2026-07-22 — release-readiness audit)
+
+_Repo-side fixes landed 2026-07-22: stale Google OAuth URL scheme and Sign in
+with Apple entitlement removed, PrivacyInfo email claim replaced with a DOB
+(Other Data Types) entry, privacy fallback text corrected (no Apple/Google
+sign-in; Firebase + LiveKit processors disclosed; privacy contact added),
+`ITSAppUsesNonExemptEncryption=false` added, photo-library usage string made
+accurate, "free during the beta" boost copy neutralised. The items below are
+the still-open submission gates._
+
+- [ ] **Guideline 1.2 content filtering** — no pre-display moderation exists
+      for profile photos, chat text, or profile free-text (no Storage
+      trigger / Vision SafeSearch, no text filter; `functions/src/index.ts`
+      exports no moderation function). Apple requires "a method for filtering
+      objectionable material" for UGC apps; dating apps get extra scrutiny.
+- [ ] **Moderation queue live + staffed + SLA** (duplicate of Trust & safety
+      above, listed here because App Review asks dating apps to describe it)
+      — plus the in-app copy already promises "Every report is reviewed"
+- [x] **Hosted legal URLs live** — _2026-07-22: deployed to Firebase Hosting
+      site `baybe-dating` (moomo-c7a37): https://baybe-dating.web.app/privacy
+      and /terms return 200; landing/support page at the root. In-app links in
+      LegalDocumentView now point there (moomo.app references removed)_
+- [x] **Support email deliverable** — _2026-07-22: all support@moomo.app
+      references replaced with moomolab@gmail.com (monitored Google account
+      used for Firebase/ASC)_
+- [x] **App Store Connect app record** for com.moomo.dating — _2026-07-22:
+      name Baybe + subtitle, description/keywords/support+marketing URLs,
+      copyright, categories (Lifestyle/Social Networking), age rating
+      questionnaire with 18+ override, review notes + demo account, privacy
+      policy URL all set via ASC API. App Privacy labels REMAIN — no public
+      API; enter manually in the console from PrivacyInfo.xcprivacy_
+- [x] **ASC API issuer ID** — _found in ~/FitCheckAI/.env.asc.local
+      (3678b63e-…2a72); key AuthKey_3TH447PNUA.p8 works; build 1.0(1)
+      uploaded + processed VALID + attached to the version 2026-07-22_
+- [x] **Review credentials** — _+1 650 555 1234 / OTP 123456 (Firebase test
+      number, config-verified) in App Review notes with two spare accounts;
+      end-to-end sign-in exercised on simulator with a registered App Check
+      debug token 2026-07-22_
+- [ ] One real device-to-device speed call on the production stack (proves
+      the stored LiveKit key/secret are valid, not just present)
 
 ## Strongly recommended (do before, or accept documented risk)
 - [ ] `deleteAccount` moved to a queued job (P2-3)

@@ -107,8 +107,8 @@ struct BoostView: View {
                     }
 
                     Text(model.state.remainingBoosts == 1
-                         ? "1 boost left — free during the beta."
-                         : "\(model.state.remainingBoosts) boosts left — free during the beta.")
+                         ? "1 boost left — refreshed daily."
+                         : "\(model.state.remainingBoosts) boosts left — refreshed daily.")
                         .font(Typography.caption)
                         .foregroundStyle(Palette.textTertiary)
                         .padding(.bottom, Space.xl)

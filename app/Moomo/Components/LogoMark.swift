@@ -47,7 +47,7 @@ struct LogoMark: View {
             }
         }
         .accessibilityElement()
-        .accessibilityLabel("Moomo")
+        .accessibilityLabel("Baybe")
     }
 }
 
