@@ -1449,6 +1449,26 @@ describe('unmatches — entirely server-owned (unmatchUser callable)', () => {
   });
 });
 
+describe('passes — entirely server-owned (submitCallDecision)', () => {
+  test('nobody can read, list, forge, or delete pass tombstones — not even their author', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'passes', ALICE, 'passed', BOB), {
+        sessionId: 's1',
+        createdAt: Timestamp.now(),
+      });
+    });
+
+    // Not the author, not the person passed on, no list, no forgery, no undo.
+    await assertFails(getDoc(doc(as(ALICE), 'passes', ALICE, 'passed', BOB)));
+    await assertFails(getDoc(doc(as(BOB), 'passes', ALICE, 'passed', BOB)));
+    await assertFails(getDocs(collection(as(ALICE), 'passes', ALICE, 'passed')));
+    await assertFails(
+      setDoc(doc(as(BOB), 'passes', BOB, 'passed', ALICE), { createdAt: Timestamp.now() })
+    );
+    await assertFails(deleteDoc(doc(as(ALICE), 'passes', ALICE, 'passed', BOB)));
+  });
+});
+
 describe('users/{uid}/callHistory — private, server-written', () => {
   async function seedHistory(uid, sessionId, extra = {}) {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {

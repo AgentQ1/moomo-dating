@@ -19,7 +19,9 @@
  *    `lastActiveAt` never leaves the server — the client gets a computed
  *    `isOnline` boolean, so precise activity times can't be harvested.
  *  - BLOCK-FILTERED BOTH DIRECTIONS, server-side (the old client-side filter
- *    could be stripped by a tampered client).
+ *    could be stripped by a tampered client). After-call passes are filtered
+ *    the same way: a pass severs the pair for matchmaking, so neither side
+ *    may keep seeing the other here.
  *  - COMPATIBILITY-FILTERED with the same table matchmaking pairs by —
  *    Discover must never advertise a person the queue would refuse.
  *  - Rate-limited per user and behind the `discoveryEnabled` kill switch.
@@ -105,27 +107,43 @@ function candidateFrom(
   };
 }
 
-/** Non-transactional both-directions block check for a batch of candidates. */
-async function filterBlocked(
+/**
+ * Non-transactional both-directions exclusion check for a batch of
+ * candidates: blocks AND after-call pass tombstones. Discover must never
+ * advertise a person the queue would refuse to pair — and the queue refuses
+ * both blocked and passed-on pairs.
+ */
+async function filterExcluded(
   uid: string,
   candidates: FirebaseFirestore.QueryDocumentSnapshot[]
-): Promise<{ allowed: FirebaseFirestore.QueryDocumentSnapshot[]; removed: number }> {
-  if (candidates.length === 0) return { allowed: [], removed: 0 };
+): Promise<{
+  allowed: FirebaseFirestore.QueryDocumentSnapshot[];
+  blockedRemoved: number;
+  passedRemoved: number;
+}> {
+  if (candidates.length === 0) {
+    return { allowed: [], blockedRemoved: 0, passedRemoved: 0 };
+  }
   const refs = candidates.flatMap((c) => [
     db().collection("blocks").doc(uid).collection("blocked").doc(c.id),
     db().collection("blocks").doc(c.id).collection("blocked").doc(uid),
+    db().collection("passes").doc(uid).collection("passed").doc(c.id),
+    db().collection("passes").doc(c.id).collection("passed").doc(uid),
   ]);
   const snaps = await db().getAll(...refs);
   const allowed: FirebaseFirestore.QueryDocumentSnapshot[] = [];
-  let removed = 0;
+  let blockedRemoved = 0;
+  let passedRemoved = 0;
   candidates.forEach((c, i) => {
-    if (snaps[2 * i].exists || snaps[2 * i + 1].exists) {
-      removed += 1;
+    if (snaps[4 * i].exists || snaps[4 * i + 1].exists) {
+      blockedRemoved += 1;
+    } else if (snaps[4 * i + 2].exists || snaps[4 * i + 3].exists) {
+      passedRemoved += 1;
     } else {
       allowed.push(c);
     }
   });
-  return { allowed, removed };
+  return { allowed, blockedRemoved, passedRemoved };
 }
 
 export const getDiscoveryFeed = onCall(callable(20), async (request) => {
@@ -200,7 +218,10 @@ export const getDiscoveryFeed = onCall(callable(20), async (request) => {
   const compatible = pooled.filter((snapshot) =>
     isMutuallyCompatible(viewer, snapshot.data())
   );
-  const { allowed, removed } = await filterBlocked(uid, compatible);
+  const { allowed, blockedRemoved, passedRemoved } = await filterExcluded(
+    uid,
+    compatible
+  );
 
   const ranked = allowed
     .map((snapshot) => ({
@@ -237,7 +258,8 @@ export const getDiscoveryFeed = onCall(callable(20), async (request) => {
     uid,
     returned: candidates.length,
     pooled: pooled.length,
-    blockedFiltered: removed,
+    blockedFiltered: blockedRemoved,
+    passedFiltered: passedRemoved,
     // Sustained `true` in production means the activityBucket backfill has
     // not run — alert on it (see OBSERVABILITY_AND_INCIDENT_PLAN.md).
     fallbackUsed,

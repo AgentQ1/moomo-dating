@@ -29,9 +29,11 @@
  *     presence heartbeat aborted the pairing transaction — a hidden
  *     contention multiplier. Profiles are now read non-transactionally
  *     (staleness of seconds is harmless for preferences/boosts); the
- *     transaction's read-set is queue entries and block documents only.
+ *     transaction's read-set is queue entries and block/pass documents only.
  *     Block checks deliberately STAY transactional — "blocked pairs are
  *     never paired" is a safety invariant and must serialize with blockUser.
+ *     Pass tombstones ride the same transactional read: "a passed pair is
+ *     never re-paired" is a user-choice invariant of the same shape.
  *
  *  3. NO PER-REQUEST SWEEP. Stale-entry hygiene moved to the scheduled
  *     `sweepMatchmakingQueue` (every minute); joins and leaves no longer run
@@ -52,6 +54,7 @@ import {
   requireAuth,
   requireString,
   isBlockedEitherWay,
+  hasPassedEitherWay,
   participantSummary,
   ParticipantSummary,
   CALL_MODES,
@@ -289,16 +292,19 @@ export const joinMatchmakingQueue = onCall(callable(20), async (request) => {
         ...fifoCandidates.filter((id) => !isBoosted(profiles.get(id), now)),
       ];
 
-      // First candidate who is mutually compatible and not blocked either
-      // way. The block check is transactional on purpose — it serializes
-      // with blockUser so a racing block can never be paired past.
+      // First candidate who is mutually compatible, not blocked either way,
+      // and never passed on either way. The block check is transactional on
+      // purpose — it serializes with blockUser so a racing block can never be
+      // paired past. The pass check rides the same pattern: a pass is a
+      // recorded "not interested", and re-pairing the pair would put someone
+      // back on a live call with a person they turned down.
       let peer: string | null = null;
       for (const candidate of rankedCandidates) {
         if (!isMutuallyCompatible(mine, profiles.get(candidate))) continue;
-        if (!(await isBlockedEitherWay(tx, uid, candidate))) {
-          peer = candidate;
-          break;
-        }
+        if (await isBlockedEitherWay(tx, uid, candidate)) continue;
+        if (await hasPassedEitherWay(tx, uid, candidate)) continue;
+        peer = candidate;
+        break;
       }
 
       if (peer) {

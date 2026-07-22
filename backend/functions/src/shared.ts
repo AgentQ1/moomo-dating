@@ -163,6 +163,38 @@ export async function isBlockedEitherWay(
   return ab.exists || ba.exists;
 }
 
+/**
+ * passes/{uid}/passed/{peerUid} — the pair-level record of an after-call
+ * pass, written by submitCallDecision. Entirely server-owned and never
+ * readable by any client (a pass must stay indistinguishable from "hasn't
+ * decided", so not even its author gets to list these).
+ */
+export function passRef(
+  uid: string,
+  peerUid: string
+): FirebaseFirestore.DocumentReference {
+  return db().collection("passes").doc(uid).collection("passed").doc(peerUid);
+}
+
+/**
+ * True when either user has passed on the other after a call. A pass is a
+ * recorded "not interested": the pair must never be paired again or
+ * advertised to each other — a call needs both people, so one side's pass
+ * severs it in both directions, same shape as a block (but without a block's
+ * cascade: nothing existing is torn down, the pair simply never recurs).
+ */
+export async function hasPassedEitherWay(
+  tx: FirebaseFirestore.Transaction,
+  a: string,
+  b: string
+): Promise<boolean> {
+  const [ab, ba] = await Promise.all([
+    tx.get(passRef(a, b)),
+    tx.get(passRef(b, a)),
+  ]);
+  return ab.exists || ba.exists;
+}
+
 /** Appends to `users/{uid}/notifications` — the feed behind the Discover bell. */
 export function writeNotification(
   writer: FirebaseFirestore.Transaction | FirebaseFirestore.WriteBatch,

@@ -250,6 +250,77 @@ describe('preference-aware pairing — only mutually compatible users are paired
   });
 });
 
+describe('pass severance — a pass is a recorded choice the queue must respect', () => {
+  beforeEach(clearFirestore);
+
+  const CAROL = 'carol-pass-uid';
+
+  async function seedProfile(uid, data = {}) {
+    await db
+      .doc(`publicProfiles/${uid}`)
+      .set({ displayName: uid, updatedAt: Timestamp.now(), ...data });
+  }
+
+  /** Pair Alice and Bob, end the call, record Alice's pass on Bob. */
+  async function pairAndPass() {
+    await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const { session } = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await endCall(asUser(ALICE, { sessionId: session.sessionId, reason: 'ended' }));
+    await decide(asUser(ALICE, { sessionId: session.sessionId, decision: 'pass' }));
+    return session.sessionId;
+  }
+
+  test('a pass writes the pair tombstone; a like never does', async () => {
+    await seedProfiles();
+    const sessionId = await pairAndPass();
+    const outcome = await decide(asUser(BOB, { sessionId, decision: 'like' }));
+
+    assert.equal(outcome.outcome, 'likeSent');
+    const tombstone = await db.doc(`passes/${ALICE}/passed/${BOB}`).get();
+    assert.ok(tombstone.exists, "Alice's pass is recorded at pair level");
+    assert.equal(tombstone.get('sessionId'), sessionId);
+    assert.ok(
+      !(await db.doc(`passes/${BOB}/passed/${ALICE}`).get()).exists,
+      "Bob's like must not write a tombstone"
+    );
+  });
+
+  test('a passed pair is never re-paired — and both still pair with other people', async () => {
+    await seedProfiles();
+    await seedProfile(CAROL);
+    await pairAndPass();
+
+    // Bob rejoins first and waits; Alice's join must skip past him.
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    assert.equal(bobJoin.status, 'waiting');
+    const aliceJoin = await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    assert.equal(aliceJoin.status, 'waiting', 'she passed on him — never again');
+
+    // Carol joins: she pairs with Bob, the older waiter — the severance
+    // belongs to the pair, not to either person.
+    const carolJoin = await joinQueue(asUser(CAROL, { mode: 'voice' }));
+    assert.equal(carolJoin.status, 'matched');
+    assert.ok(carolJoin.session.participants[BOB], 'Bob is still matchable with others');
+    assert.equal(
+      (await db.doc(`matchmakingQueue/${ALICE}`).get()).get('status'),
+      'waiting',
+      'Alice keeps waiting for someone she has not passed on'
+    );
+  });
+
+  test('the passed-on side cannot force a rematch via "Talk to Him"', async () => {
+    await seedProfiles();
+    await pairAndPass();
+
+    await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice', preferredPeerId: ALICE }));
+
+    assert.equal(bobJoin.status, 'waiting', 'an invitation must not override her pass');
+    const active = await db.collection('callSessions').where('status', '==', 'active').get();
+    assert.equal(active.size, 0);
+  });
+});
+
 describe('boost priority — an active boost really moves you up the queue', () => {
   beforeEach(clearFirestore);
 

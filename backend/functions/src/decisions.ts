@@ -13,6 +13,11 @@
  *  - A block severs the pair for decisions too: once either user has blocked
  *    the other — even after the session was created — no decision on that
  *    session writes anything or mints (or resurrects) a match/conversation.
+ *  - A pass severs the pair for FUTURE pairing: it writes a server-owned
+ *    passes/{uid}/passed/{peer} tombstone that matchmaking and discovery
+ *    exclude by, in both directions. Unlike a block it tears nothing down —
+ *    the pair simply never recurs. (An unmatch is deliberately different:
+ *    both people liked each other once, so the pair may meet again.)
  */
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { Timestamp } from "firebase-admin/firestore";
@@ -28,6 +33,7 @@ import {
   historyRef,
   writeNotification,
   isBlockedEitherWay,
+  passRef,
   ParticipantSummary,
 } from "./shared";
 import { enforceRateLimit } from "./ratelimit";
@@ -189,6 +195,11 @@ export const submitCallDecision = onCall(callable(20), async (request) => {
     >;
 
     if (decision === "pass") {
+      // The pair-level tombstone matchmaking and discovery exclude by: a pass
+      // is a recorded "not interested", and the queue must never put this
+      // person back on a live call with someone they turned down. A set, not
+      // a create — the decision retry above may land here twice.
+      tx.set(passRef(uid, peer), { sessionId, createdAt: now }, { merge: true });
       tx.set(
         historyRef(uid, sessionId),
         { outcome: "passed", updatedAt: now },

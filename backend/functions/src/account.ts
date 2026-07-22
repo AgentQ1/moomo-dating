@@ -58,6 +58,10 @@ export const deleteAccount = onCall(callable(5), async (request) => {
   await firestore.collection("boosts").doc(uid).delete();
   await firestore.collection("publicProfiles").doc(uid).delete();
   await firestore.recursiveDelete(firestore.collection("blocks").doc(uid));
+  // This account's own pass tombstones. Other users' passes naming this uid
+  // stay, like their block entries — their choice about this pair outlives
+  // the account it was about.
+  await firestore.recursiveDelete(firestore.collection("passes").doc(uid));
   // users/{uid} and everything under it: private/onboarding, callHistory,
   // notifications.
   await firestore.recursiveDelete(firestore.collection("users").doc(uid));

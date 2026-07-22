@@ -3,7 +3,7 @@ import Foundation
 /// Who may be paired with whom, from `gender` + `interestedIn`.
 ///
 /// One definition, used by Discover's feed filter; the backend mirrors the
-/// same table in `backend/functions/src/matchmaking.ts` (`wantsGender`), so
+/// same table in `backend/functions/src/compatibility.ts` (`wantsGender`), so
 /// the people Discover shows are the people matchmaking would actually pair.
 ///
 /// The rules:

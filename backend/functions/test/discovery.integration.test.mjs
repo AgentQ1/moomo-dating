@@ -111,6 +111,19 @@ describe('getDiscoveryFeed — the only way to browse profiles', () => {
     assert.deepEqual(uids(result), ['stranger-feed']);
   });
 
+  test('an after-call pass hides the pair from BOTH feeds — passer and passed-on alike', async () => {
+    await seedProfile(VIEWER);
+    await seedProfile('passed-by-viewer');
+    await seedProfile('passed-the-viewer');
+    await seedProfile('stranger-feed');
+    await db.doc(`passes/${VIEWER}/passed/passed-by-viewer`).set({ createdAt: Timestamp.now() });
+    await db.doc(`passes/passed-the-viewer/passed/${VIEWER}`).set({ createdAt: Timestamp.now() });
+
+    const result = await feed(asUser(VIEWER));
+
+    assert.deepEqual(uids(result), ['stranger-feed']);
+  });
+
   test('profiles that never finished onboarding are not shown to strangers', async () => {
     await seedProfile(VIEWER);
     await seedProfile('unnamed-feed', { displayName: '' });

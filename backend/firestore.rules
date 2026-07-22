@@ -449,6 +449,17 @@ service cloud.firestore {
     }
 
     // ---------------------------------------------------------------
+    // passes/{uid}/passed/{passedUid} — after-call pass tombstones,
+    // entirely server-owned. Written by submitCallDecision; matchmaking
+    // and discovery exclude the pair by them. Closed even to their author:
+    // "they passed" must stay indistinguishable from "they haven't
+    // decided", and a readable pass list would leak exactly that.
+    // ---------------------------------------------------------------
+    match /passes/{uid}/passed/{passedUid} {
+      allow read, write: if false; // submitCallDecision + Admin SDK only
+    }
+
+    // ---------------------------------------------------------------
     // reports/{reportId} — entirely server-owned.
     //
     // Filing goes through the reportUser callable, which validates the
