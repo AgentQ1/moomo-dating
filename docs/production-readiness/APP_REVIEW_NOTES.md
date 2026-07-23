@@ -42,6 +42,14 @@ in the demo phone number._
 > summary) were entered into ASC App Review Information via the API, and the
 > demo sign-in was exercised end-to-end on a simulator with a registered App
 > Check debug token._
+>
+> _2026-07-23: that simulator-only check was hiding a release-build outage.
+> Discover failed on TestFlight with "Something went wrong" because the
+> Firebase iOS app registration had no Apple **Team ID**, so App Attest —
+> which Release builds use, and which no debug-token run ever exercises —
+> could not mint a token. Team ID `JR6W8P6Z8N` is now set; a Release build on
+> a real device served `discovery_feed_served returned=12` with zero App
+> Check rejections. See backend/README.md "App Check" step 1b._
 
 ## Evidence map (for whoever fields reviewer questions)
 

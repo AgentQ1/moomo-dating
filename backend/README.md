@@ -86,6 +86,23 @@ Deploy order is load-bearing. Before this code reaches production:
 1. Enable the App Check API (`firebaseappcheck.googleapis.com`) for
    `moomo-c7a37` and register the iOS app with **App Attest** in Firebase
    console → App Check.
+1b. **Set the Apple Team ID on the iOS app registration.** App Attest
+   attestation is verified against Apple as `<teamID>.<bundleID>`, so with no
+   Team ID stored, Firebase cannot validate it and every RELEASE build fails
+   to mint a token — the SDK then sends its error *placeholder* instead, and
+   the backend refuses it with `unauthenticated` (the admin SDK logs
+   "Decoding App Check token failed", because the placeholder is not a JWT).
+   DEBUG builds are unaffected, which is exactly why this survived to
+   TestFlight: it is invisible on a simulator with a registered debug token.
+   Ours is `JR6W8P6Z8N` (`DEVELOPMENT_TEAM` in `app/Moomo.xcodeproj`); it was
+   missing until 2026-07-23 and broke Discover on TestFlight. Verify with:
+
+   ```sh
+   curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+     -H "x-goog-user-project: moomo-c7a37" \
+     "https://firebase.googleapis.com/v1beta1/projects/moomo-c7a37/iosApps" \
+     | grep teamId   # must print JR6W8P6Z8N — absent means release builds are broken
+   ```
 2. Register every developer simulator's **debug token** (the iOS app installs
    `AppCheckDebugProvider` in DEBUG builds — token prints on first run).
 3. Watch App Check request metrics until verified traffic dominates.
