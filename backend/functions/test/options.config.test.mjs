@@ -44,6 +44,8 @@ const { callable, trigger, scheduled, REGION } = await import('../lib/options.js
 const EXPECTED_MAX_INSTANCES = {
   joinMatchmakingQueue: 20,
   leaveMatchmakingQueue: 20,
+  acceptCallInvite: 20,
+  declineCallInvite: 20,
   getDiscoveryFeed: 20,
   submitCallDecision: 20,
   endCallSession: 20,

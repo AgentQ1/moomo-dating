@@ -25,7 +25,12 @@ export type OpsEvent =
   | "matchmaking_sweep"
   | "discovery_feed_served"
   | "discovery_feed_suspicious"
-  | "block_cascade_completed";
+  | "block_cascade_completed"
+  | "ring_fanout"
+  | "ring_accepted"
+  | "ring_unavailable"
+  | "ring_declined"
+  | "ring_expired_swept";
 
 export interface OpsEntry {
   event: OpsEvent;

@@ -50,8 +50,8 @@ async function clearFirestore() {
 }
 
 /** Alice's whole world: profile docs, a match+conversation+messages with Bob,
- *  a finished call, queue entry, boosts, a block, notifications, a photo, an
- *  Auth user, and reports in both directions. */
+ *  a finished call, queue entry, a stale ring invite, boosts, a block,
+ *  notifications, a photo, an Auth user, and reports in both directions. */
 async function seedAliceWorld() {
   const now = Timestamp.now();
   await getAuth().createUser({ uid: ALICE }).catch(() => {});
@@ -62,6 +62,10 @@ async function seedAliceWorld() {
   await db.doc(`users/${ALICE}/notifications/n1`).set({ kind: 'match', title: 't', body: 'b', isRead: false, createdAt: now });
   await db.doc(`publicProfiles/${ALICE}`).set({ displayName: 'Alice', updatedAt: now });
   await db.doc(`matchmakingQueue/${ALICE}`).set({ mode: 'voice', status: 'waiting', createdAt: now });
+  await db.doc(`callInvites/${ALICE}`).set({ uid: ALICE, callerUid: BOB, mode: 'voice', status: 'expired', createdAt: now, expiresAt: now, updatedAt: now });
+  // A ring Alice fanned out that Bob never answered: his slot carries her
+  // denormalised caller summary, so it must go with her account.
+  await db.doc(`callInvites/${BOB}`).set({ uid: BOB, callerUid: ALICE, mode: 'voice', status: 'expired', caller: { uid: ALICE, displayName: 'Alice' }, createdAt: now, expiresAt: now, updatedAt: now });
   await db.doc(`boosts/${ALICE}`).set({ remainingBoosts: 2, grantedAt: now });
   await db.doc(`blocks/${ALICE}/blocked/some-third-uid`).set({ displayName: 'Third', createdAt: now });
 
@@ -99,6 +103,8 @@ describe('deleteAccount — the complete cascade', () => {
       `users/${ALICE}/notifications/n1`,
       `publicProfiles/${ALICE}`,
       `matchmakingQueue/${ALICE}`,
+      `callInvites/${ALICE}`,
+      `callInvites/${BOB}`,
       `boosts/${ALICE}`,
       `blocks/${ALICE}/blocked/some-third-uid`,
       `matches/${PAIR}`,

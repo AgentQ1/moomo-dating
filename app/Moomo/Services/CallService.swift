@@ -14,6 +14,23 @@ protocol CallService: Sendable {
     /// Establishes the call with a found candidate.
     func connect(to candidate: DiscoveryCandidate, mode: CallMode) async throws -> CallSession
 
+    /// The foreground incoming-ring feed: yields the currently ringing
+    /// invite, or nil when there is none (never rung, withdrawn, expired,
+    /// or already answered). Nil matters — it takes the banner down.
+    func incomingInvites() -> AsyncStream<CallInvite?>
+
+    /// Answers a ring. First accepter wins server-side; success returns the
+    /// caller as the candidate for the immediately-following
+    /// `connect(to:mode:)` — the session already exists by then, exactly
+    /// like an instant match. Losing the race, an expired ring, a caller
+    /// who left, or a block between the pair (all indistinguishable by
+    /// design) throw `CallServiceError.inviteUnavailable`.
+    func acceptInvite(_ invite: CallInvite) async throws -> DiscoveryCandidate
+
+    /// Says no to a ring. Best-effort cleanup like leaving the queue:
+    /// errors are swallowed, because the invite expires server-side anyway.
+    func declineInvite(_ invite: CallInvite) async
+
     /// Emits when the server ends the session out from under us — the peer
     /// hung up (or blocked; the two are indistinguishable by design). Never
     /// emits for our own `record()`. Finishes after the first event.
@@ -37,6 +54,10 @@ enum CallServiceError: LocalizedError, Equatable {
     /// (or produced for someone else). A client-sequencing bug, surfaced
     /// honestly rather than fabricating a call.
     case sessionNotReady
+    /// An accepted ring the server couldn't honour: someone else answered
+    /// first, the ring expired, the caller gave up — or a block sits between
+    /// the pair, which must read exactly the same (silent-block invariant).
+    case inviteUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -44,6 +65,8 @@ enum CallServiceError: LocalizedError, Equatable {
             "No one's free to talk right now. Try again in a bit."
         case .sessionNotReady:
             "The call couldn't be set up. Please try again."
+        case .inviteUnavailable:
+            "Looks like they just connected with someone else."
         }
     }
 }
@@ -62,6 +85,13 @@ final class MockCallService: CallService, @unchecked Sendable {
     private let isBlocked: @Sendable (String) async -> Bool
 
     private let historyBroadcaster = StreamBroadcaster<[CallRecord]>([])
+
+    /// The current ring, nil when silent — the same "latest value + changes"
+    /// shape the Firestore listener exposes.
+    private let inviteBroadcaster = StreamBroadcaster<CallInvite?>(nil)
+
+    private let declinedLock = NSLock()
+    private var recordedDeclines: [CallInvite] = []
 
     private let endEventsLock = NSLock()
     private var endEventContinuations: [String: [AsyncStream<CallEndReason>.Continuation]] = [:]
@@ -110,6 +140,62 @@ final class MockCallService: CallService, @unchecked Sendable {
             maxDuration: CallSession.speedCallDuration
         )
     }
+
+    // MARK: - Ring invites
+
+    func incomingInvites() -> AsyncStream<CallInvite?> {
+        inviteBroadcaster.stream()
+    }
+
+    /// Accepting consumes the ring — the real backend flips the document to
+    /// `accepted`, which the listener reduces to nil — and hands back the
+    /// caller for the follow-up `connect`. The block check mirrors the real
+    /// callable's transactional safety invariant: a blocked pair answers
+    /// "unavailable", never "blocked".
+    func acceptInvite(_ invite: CallInvite) async throws -> DiscoveryCandidate {
+        if await isBlocked(invite.caller.id) {
+            throw CallServiceError.inviteUnavailable
+        }
+        inviteBroadcaster.send(nil)
+        return invite.caller
+    }
+
+    /// Declines are recorded for test assertions and the ring is consumed,
+    /// matching the real service's write of a terminal `declined` status.
+    func declineInvite(_ invite: CallInvite) async {
+        declinedLock.lock()
+        recordedDeclines.append(invite)
+        declinedLock.unlock()
+        inviteBroadcaster.send(nil)
+    }
+
+    /// The invites `declineInvite` was asked to report, oldest first.
+    var declinedInvites: [CallInvite] {
+        declinedLock.lock()
+        defer { declinedLock.unlock() }
+        return recordedDeclines
+    }
+
+    #if DEBUG
+    /// Test/debug hook: the backend fans a ring out to us. `expiresAt`
+    /// defaults to the server's 10s acceptance window (`RING_TTL_MS`).
+    @discardableResult
+    func simulateIncomingInvite(
+        caller: DiscoveryCandidate,
+        mode: CallMode,
+        expiresAt: Date = Date().addingTimeInterval(10)
+    ) -> CallInvite {
+        let invite = CallInvite(id: caller.id, caller: caller, mode: mode, expiresAt: expiresAt)
+        inviteBroadcaster.send(invite)
+        return invite
+    }
+
+    /// Test/debug hook: the ring ends without us — cancelled, expired, or
+    /// answered by someone faster.
+    func simulateInviteWithdrawn() {
+        inviteBroadcaster.send(nil)
+    }
+    #endif
 
     // MARK: - Peer end
 

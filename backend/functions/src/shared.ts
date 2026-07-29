@@ -27,6 +27,36 @@ export const SPEED_CALL_SECONDS = 180;
 export const QUEUE_ENTRY_TTL_MS = 40 * 1000;
 
 /**
+ * How long a ring invite stays acceptable server-side. The client's banner
+ * shows for 7 seconds (`CallInvite.ringSeconds`) and MUST stay under this —
+ * the same headroom pattern as the client's 30-second `searchTimeout` under
+ * the 40-second `QUEUE_ENTRY_TTL_MS`: an accept tapped at the last visible
+ * moment still lands inside the server's window.
+ */
+export const RING_TTL_MS = 10_000;
+
+/** Callees rung per fan-out — a banner burst, not a broadcast. */
+export const RING_FANOUT_LIMIT = 8;
+
+/** `publicProfiles` candidates scanned per fan-out (pre-filter headroom). */
+export const RING_POOL = 40;
+
+/** One caller may not re-ring the same callee this soon (hounding brake). */
+export const RING_SAME_CALLER_COOLDOWN_MS = 120_000;
+
+/** Nobody gets rung again this soon after their last ring, whoever it was from. */
+export const RING_ANY_CALLER_GAP_MS = 30_000;
+
+/**
+ * callInvites/{calleeUid} — one incoming ring per user, server-written only.
+ * The callee's foreground client listens to this single document for the
+ * "ringing" transition; the latest ring overwrites a terminal older one.
+ */
+export function callInviteRef(uid: string): FirebaseFirestore.DocumentReference {
+  return db().collection("callInvites").doc(uid);
+}
+
+/**
  * The presence bucket size. Must equal the client's
  * `PresenceHeartbeat.bucketInterval` (600s) and the rules'
  * `activityBucketIsHonest` modulus (600,000 ms) — the three move together.

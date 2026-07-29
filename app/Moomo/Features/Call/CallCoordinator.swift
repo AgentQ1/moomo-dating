@@ -56,6 +56,29 @@ final class CallCoordinator: ObservableObject {
         flow.start()
     }
 
+    /// Answers an incoming ring: builds the flow around the accepted invite
+    /// and presents it. With a call already running the invite is ignored —
+    /// the banner is suppressed while a flow exists, so arriving here busy
+    /// means a race the running call wins; two concurrent calls is never a
+    /// thing.
+    func acceptIncoming(_ invite: CallInvite) {
+        guard flow == nil else { return }
+        let flow = CallFlowModel(
+            mode: invite.mode,
+            incoming: invite,
+            calls: services.calls,
+            matches: services.matches,
+            safety: services.safety,
+            media: services.media,
+            permissions: services.callPermissions,
+            onFinished: { [weak self] in self?.finish() }
+        )
+        self.flow = flow
+        observeStage(of: flow)
+        isPresenting = true
+        flow.start()
+    }
+
     /// A minimised call whose stage leaves `.active` must come back on
     /// screen: the like/pass decision (or the failure) would otherwise be
     /// stranded behind the tabs — the banner only advertises *active* calls,

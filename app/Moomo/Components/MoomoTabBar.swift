@@ -138,6 +138,7 @@ struct MainTabView: View {
     @StateObject private var chatListModel: ChatListModel
     @StateObject private var notificationsModel: NotificationsModel
     @StateObject private var boostModel: BoostModel
+    @StateObject private var incomingCallModel: IncomingCallModel
 
     @State private var selection: Tab = .discover
     @State private var chatPath = NavigationPath()
@@ -168,6 +169,7 @@ struct MainTabView: View {
         ))
         _notificationsModel = StateObject(wrappedValue: NotificationsModel(service: AppServices.retained(for: user).notifications))
         _boostModel = StateObject(wrappedValue: BoostModel(service: AppServices.retained(for: user).boost))
+        _incomingCallModel = StateObject(wrappedValue: IncomingCallModel(calls: AppServices.retained(for: user).calls))
     }
 
     var body: some View {
@@ -242,6 +244,24 @@ struct MainTabView: View {
             }
         }
         .animation(Motion.transition, value: isLiveDataPaused)
+        .overlay(alignment: .top) {
+            // Suppressed while any flow exists: a running call (even
+            // minimised) always outranks a new ring, and the accept callable
+            // would answer "unavailable" for a busy user anyway.
+            if coordinator.flow == nil, let invite = incomingCallModel.invite {
+                IncomingCallBanner(
+                    invite: invite,
+                    onAccept: {
+                        guard let accepted = incomingCallModel.accept() else { return }
+                        coordinator.acceptIncoming(accepted)
+                    },
+                    onDecline: { incomingCallModel.decline() }
+                )
+                .padding(.horizontal, Space.md)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(Motion.transition, value: incomingCallModel.invite)
         .task {
             for await failure in FirestoreListeners.failures.stream() {
                 isLiveDataPaused = failure != nil

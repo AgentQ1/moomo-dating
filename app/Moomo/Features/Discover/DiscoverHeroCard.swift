@@ -37,9 +37,12 @@ struct HeroCard: View {
                     .padding(.top, Space.md)
             }
 
-            Text("Someone is waiting")
+            Text(featured.wantsToTalk ? "\(featured.displayName) is waiting" : "Someone is waiting")
                 .font(Typography.heroTitle)
                 .foregroundStyle(Palette.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .padding(.horizontal, Space.md)
                 .padding(.top, Space.md)
 
             Text("Start a video chat and make a real connection.")

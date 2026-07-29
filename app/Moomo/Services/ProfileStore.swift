@@ -38,6 +38,7 @@ extension ProfileStore {
 ///     users/{uid}/notifications/{id}   bell feed — server-written, owner marks read
 ///     publicProfiles/{uid}             the projection others may see
 ///     matchmakingQueue/{uid}           queue entry — server-written, owner reads
+///     callInvites/{uid}                incoming call ring — server-written, owner reads
 ///     callSessions/{id}                live call state — server-owned
 ///     matches/{pairKey}                mutual likes — server-owned
 ///     conversations/{id}               one per match — server-owned
@@ -57,6 +58,7 @@ enum FirestorePath {
     static let callHistory = "callHistory"
     static let notifications = "notifications"
     static let matchmakingQueue = "matchmakingQueue"
+    static let callInvites = "callInvites"
     static let callSessions = "callSessions"
     static let matches = "matches"
     static let conversations = "conversations"

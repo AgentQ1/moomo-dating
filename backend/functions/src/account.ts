@@ -35,10 +35,11 @@ export const deleteAccount = onCall(callable(5), async (request) => {
   // full message threads. Matches and conversations share participantIds, but
   // each is queried independently — a block cascade may have left one without
   // the other.
-  const [matches, conversations, sessions] = await Promise.all([
+  const [matches, conversations, sessions, fannedOutRings] = await Promise.all([
     firestore.collection("matches").where("participantIds", "array-contains", uid).get(),
     firestore.collection("conversations").where("participantIds", "array-contains", uid).get(),
     firestore.collection("callSessions").where("participantIds", "array-contains", uid).get(),
+    firestore.collection("callInvites").where("callerUid", "==", uid).get(),
   ]);
   for (const match of matches.docs) {
     await firestore.recursiveDelete(match.ref);
@@ -55,6 +56,15 @@ export const deleteAccount = onCall(callable(5), async (request) => {
 
   // Singleton documents and owned trees.
   await firestore.collection("matchmakingQueue").doc(uid).delete();
+  // Both sides of the ring surface: my own incoming slot, and every callee
+  // slot still carrying my denormalised caller summary from a fan-out —
+  // the same category as the session summaries above, so it goes too. An
+  // in-flight accept conflicts, retries, finds the doc gone, and answers
+  // its uniform "unavailable"; the callee's banner hides on the deletion.
+  await firestore.collection("callInvites").doc(uid).delete();
+  for (const ring of fannedOutRings.docs) {
+    await ring.ref.delete();
+  }
   await firestore.collection("boosts").doc(uid).delete();
   await firestore.collection("publicProfiles").doc(uid).delete();
   await firestore.recursiveDelete(firestore.collection("blocks").doc(uid));

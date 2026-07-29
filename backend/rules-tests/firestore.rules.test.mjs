@@ -1240,6 +1240,65 @@ describe('matchmakingQueue — own entry readable, backend-managed', () => {
   });
 });
 
+describe('callInvites — own ring readable, backend-managed', () => {
+  async function seedInvite(uid, extra = {}) {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'callInvites', uid), {
+        uid,
+        callerUid: BOB,
+        mode: 'voice',
+        status: 'ringing',
+        caller: { uid: BOB, displayName: 'Bob', age: 30, city: 'Austin', gender: 'man', photoPath: null, isVerified: false },
+        createdAt: Timestamp.now(),
+        expiresAt: Timestamp.fromMillis(Date.now() + 10_000),
+        updatedAt: Timestamp.now(),
+        ...extra,
+      });
+    });
+  }
+
+  test('a user can read their own invite (the banner listener)', async () => {
+    await seedInvite(ALICE);
+    const snap = await assertSucceeds(getDoc(doc(as(ALICE), 'callInvites', ALICE)));
+    assert.equal(snap.data().callerUid, BOB);
+  });
+
+  test('a user cannot read someone else\'s invite', async () => {
+    await seedInvite(BOB, { callerUid: ALICE });
+    await assertFails(getDoc(doc(as(ALICE), 'callInvites', BOB)));
+  });
+
+  test('invites cannot be listed — who is being rung is not public', async () => {
+    await seedInvite(BOB, { callerUid: ALICE });
+    await assertFails(getDocs(collection(as(ALICE), 'callInvites')));
+  });
+
+  test('a client cannot ring anyone directly — fan-out is the backend\'s job', async () => {
+    await assertFails(
+      setDoc(doc(as(ALICE), 'callInvites', BOB), {
+        uid: BOB,
+        callerUid: ALICE,
+        mode: 'voice',
+        status: 'ringing',
+        createdAt: serverTimestamp(),
+        expiresAt: Timestamp.fromMillis(Date.now() + 10_000),
+        updatedAt: serverTimestamp(),
+      })
+    );
+  });
+
+  test('a client cannot forge a response onto its own invite', async () => {
+    await seedInvite(ALICE);
+    await assertFails(
+      updateDoc(doc(as(ALICE), 'callInvites', ALICE), {
+        status: 'accepted',
+        sessionId: 'forged',
+      })
+    );
+    await assertFails(deleteDoc(doc(as(ALICE), 'callInvites', ALICE)));
+  });
+});
+
 describe('callSessions/{id}/decisions — closed to both participants', () => {
   test('neither participant may read or write a decision document', async () => {
     await seedCallSession('s1', [ALICE, BOB]);

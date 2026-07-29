@@ -23,6 +23,33 @@ enum CallMode: String, Codable, Sendable, CaseIterable {
     }
 }
 
+// MARK: - Ring invites
+
+/// An incoming "someone wants to talk" ring, decoded from our own
+/// `callInvites/{uid}` document (`CallInviteLogic`). Exists only while the
+/// server says `ringing` — terminal invites never decode, so holding one is
+/// proof there is a live ring to answer.
+struct CallInvite: Identifiable, Equatable, Sendable {
+    /// The caller's uid. The document holds at most one live ring, and the
+    /// accept callable addresses it implicitly (our own uid is the doc id),
+    /// so the caller is the only identity the invite needs.
+    let id: String
+    /// Who is ringing us — the participant summary the backend snapshotted
+    /// at fan-out time, shaped exactly like a `callSessions` participant.
+    let caller: DiscoveryCandidate
+    let mode: CallMode
+    /// The server's acceptance deadline (`createdAt + RING_TTL_MS`). Accepts
+    /// after this lose honestly with `.inviteUnavailable`.
+    let expiresAt: Date
+
+    /// How long the banner stays up before auto-dismissing. Deliberately
+    /// under the backend's 10s acceptance window (`RING_TTL_MS`) — the same
+    /// client-under-server pattern as `FirestoreCallService.searchTimeout`
+    /// (30s) vs `QUEUE_ENTRY_TTL_MS` (40s): the UI must give up before the
+    /// server would refuse the accept, never after.
+    static let ringSeconds: TimeInterval = 7
+}
+
 // MARK: - Session
 
 /// A call in progress. Exists only between "connected" and "ended" — the

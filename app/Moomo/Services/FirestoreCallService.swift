@@ -211,6 +211,78 @@ final class FirestoreCallService: CallService, @unchecked Sendable {
         return pending.candidate
     }
 
+    // MARK: - Ring invites
+
+    /// gRPC `failed-precondition` — a backend rejecting an accept mid-race
+    /// can surface it as an error even though the contract's normal answer
+    /// is a successful `{status:"unavailable"}` payload. Same numbering as
+    /// `DiscoveryErrorClassifier`'s gRPC table.
+    private static let grpcFailedPrecondition = 9
+
+    /// The foreground incoming-ring listener: our own `callInvites/{uid}`
+    /// document, reduced by `CallInviteLogic` to "a ringable invite or nil".
+    /// Terminal invites persist in the document and the cache replays them,
+    /// so the reduction rejects cache snapshots — the same reasoning as
+    /// `MatchmakingPairingWait.matchedSessionID`.
+    func incomingInvites() -> AsyncStream<CallInvite?> {
+        let document = db.collection(FirestorePath.callInvites).document(uid)
+        return AsyncStream { continuation in
+            let registration = document.addSnapshotListener { snapshot, error in
+                guard let snapshot else {
+                    FirestoreListeners.report(error, in: "call-invites")
+                    return
+                }
+                FirestoreListeners.recovered("call-invites")
+                continuation.yield(CallInviteLogic.invite(
+                    callerUid: snapshot.get("callerUid") as? String,
+                    caller: snapshot.get("caller") as? [String: Any],
+                    mode: snapshot.get("mode") as? String,
+                    status: snapshot.get("status") as? String,
+                    expiresAt: SocialDecoding.date(snapshot.get("expiresAt")),
+                    isFromCache: snapshot.metadata.isFromCache,
+                    now: Date()
+                ))
+            }
+            continuation.onTermination = { _ in registration.remove() }
+        }
+    }
+
+    /// First accepter wins inside the callable's transaction. Success hands
+    /// back the same session payload shape as an instant match, stored as
+    /// the pending session so the flow's existing `connect(to:mode:)` works
+    /// unchanged. Every way of losing — raced out, expired, caller gone,
+    /// busy, blocked (indistinguishable by design) — is the one friendly
+    /// `.inviteUnavailable`.
+    func acceptInvite(_ invite: CallInvite) async throws -> DiscoveryCandidate {
+        let response: [String: Any]
+        do {
+            response = try await FunctionsClient.call(.acceptCallInvite)
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == DiscoveryErrorClassifier.functionsErrorDomain,
+               nsError.code == Self.grpcFailedPrecondition {
+                throw CallServiceError.inviteUnavailable
+            }
+            throw error
+        }
+
+        guard response["status"] as? String == "accepted",
+              let session = response["session"] as? [String: Any]
+        else {
+            // `{status:"unavailable"}` — and anything else unexpected, which
+            // deserves the same honest "they're gone" over a raw failure.
+            throw CallServiceError.inviteUnavailable
+        }
+        return try storePending(fromCallablePayload: session, mode: invite.mode)
+    }
+
+    /// Best-effort, mirroring the leave-queue rationale: the banner is
+    /// already down locally, and an unreported decline simply expires
+    /// server-side. Nothing to surface to the user either way.
+    func declineInvite(_ invite: CallInvite) async {
+        _ = try? await FunctionsClient.call(.declineCallInvite)
+    }
+
     // MARK: - Peer end
 
     /// Watches the session document for the server-side end written by the

@@ -20,6 +20,7 @@ export {
   leaveMatchmakingQueue,
   sweepMatchmakingQueue,
 } from "./matchmaking";
+export { acceptCallInvite, declineCallInvite } from "./ring";
 export { getDiscoveryFeed } from "./discovery";
 export { endCallSession } from "./calls";
 export { getCallMediaToken } from "./media";

@@ -55,8 +55,12 @@ const WAITING_POOL = 10;
  * them.
  */
 const WAITING_FETCH = 30;
-/** Mirrors `FirestoreDiscoveryService.onlineWindow` in the app. */
-const ONLINE_WINDOW_MS = 5 * 60 * 1000;
+/**
+ * Mirrors `FirestoreDiscoveryService.onlineWindow` in the app. Exported for
+ * the ring fan-out (ring.ts), which only rings people inside this window —
+ * the raw `lastActiveAt` itself still never leaves the server.
+ */
+export const ONLINE_WINDOW_MS = 5 * 60 * 1000;
 
 /** The exact shape the client renders — nothing more leaves the server. */
 interface FeedCandidate {
@@ -111,13 +115,15 @@ function candidateFrom(
  * Non-transactional both-directions exclusion check for a batch of
  * candidates: blocks AND after-call pass tombstones. Discover must never
  * advertise a person the queue would refuse to pair — and the queue refuses
- * both blocked and passed-on pairs.
+ * both blocked and passed-on pairs. Shared with the ring fan-out (ring.ts)
+ * for exactly the same reason: never ring that person either. Generic over
+ * the snapshot type because the fan-out mixes query docs with a direct read.
  */
-async function filterExcluded(
+export async function filterExcluded<T extends { id: string }>(
   uid: string,
-  candidates: FirebaseFirestore.QueryDocumentSnapshot[]
+  candidates: T[]
 ): Promise<{
-  allowed: FirebaseFirestore.QueryDocumentSnapshot[];
+  allowed: T[];
   blockedRemoved: number;
   passedRemoved: number;
 }> {
@@ -131,7 +137,7 @@ async function filterExcluded(
     db().collection("passes").doc(c.id).collection("passed").doc(uid),
   ]);
   const snaps = await db().getAll(...refs);
-  const allowed: FirebaseFirestore.QueryDocumentSnapshot[] = [];
+  const allowed: T[] = [];
   let blockedRemoved = 0;
   let passedRemoved = 0;
   candidates.forEach((c, i) => {

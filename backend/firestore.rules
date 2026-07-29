@@ -7,8 +7,9 @@ rules_version = '2';
 //
 // Scope: the app spine (user bootstrap, onboarding resume/completion, profile
 // read/write, self-serve account deletion) plus the social domains —
-// callSessions, matches, conversations, messages, matchmakingQueue, blocks,
-// reports, boosts, per-user call history and notifications. The social
+// callSessions, matches, conversations, messages, matchmakingQueue,
+// callInvites, blocks, reports, boosts, per-user call history and
+// notifications. The social
 // collections are written ONLY by the Cloud Functions backend
 // (backend/functions); the client reads its own slices and appends messages.
 // Server-owned collections stay entirely client-unwritable.
@@ -280,6 +281,21 @@ service cloud.firestore {
     // pair itself with someone who never asked.
     // ---------------------------------------------------------------
     match /matchmakingQueue/{uid} {
+      allow get: if isSelf(uid);
+      allow list: if false;
+      allow create, update, delete: if false; // server-owned
+    }
+
+    // ---------------------------------------------------------------
+    // callInvites/{uid} — one incoming ring per user, backend-managed.
+    //
+    // The callee's foreground client listens to its OWN document for the
+    // "ringing" transition (the incoming-call banner). All writes go
+    // through the ring fan-out / accept / decline callables — a client
+    // that could write invite state could ring anyone, forge an
+    // acceptance, or fake a caller identity onto the banner.
+    // ---------------------------------------------------------------
+    match /callInvites/{uid} {
       allow get: if isSelf(uid);
       allow list: if false;
       allow create, update, delete: if false; // server-owned

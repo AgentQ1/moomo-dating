@@ -83,6 +83,55 @@ final class CallCoordinatorTests: XCTestCase {
         )
     }
 
+    // MARK: - Incoming rings
+
+    private var incomingInvite: CallInvite {
+        CallInvite(
+            id: "u-caller",
+            caller: DiscoveryCandidate(
+                id: "u-caller", displayName: "Kenji", age: 26, city: "Chicago",
+                photoPath: nil, isOnline: true, wantsToTalk: true, pronoun: .he
+            ),
+            mode: .video,
+            expiresAt: Date().addingTimeInterval(10)
+        )
+    }
+
+    func testAcceptIncomingPresentsAndOpensOnConnecting() async {
+        let coordinator = makeCoordinator()
+
+        coordinator.acceptIncoming(incomingInvite)
+
+        XCTAssertNotNil(coordinator.flow)
+        XCTAssertTrue(coordinator.isPresenting)
+        XCTAssertEqual(coordinator.flow?.mode, .video, "the ring's mode is the call's mode")
+        guard case .connecting(let caller) = coordinator.flow?.stage else {
+            return XCTFail(
+                "An accepted ring opens on connecting — never a search — got \(String(describing: coordinator.flow?.stage))"
+            )
+        }
+        XCTAssertEqual(caller.id, "u-caller")
+    }
+
+    func testAcceptIncomingWhileACallRunsIsIgnored() async {
+        let coordinator = makeCoordinator()
+        coordinator.start(mode: .voice)
+        let first = coordinator.flow
+        coordinator.minimise()
+
+        coordinator.acceptIncoming(incomingInvite)
+
+        XCTAssertIdentical(
+            coordinator.flow, first,
+            "A ring answered while a call runs must never stack a second flow"
+        )
+        XCTAssertEqual(coordinator.flow?.mode, .voice, "the running call keeps its mode")
+        XCTAssertFalse(
+            coordinator.isPresenting,
+            "an ignored ring must not yank a minimised call back on screen"
+        )
+    }
+
     func testFinishingTheFlowTearsItDown() async {
         let coordinator = makeCoordinator()
         coordinator.start(mode: .voice)

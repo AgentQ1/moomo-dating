@@ -10,6 +10,8 @@ import FirebaseFunctions
 enum CloudFunction: String {
     case joinMatchmakingQueue
     case leaveMatchmakingQueue
+    case acceptCallInvite
+    case declineCallInvite
     case getDiscoveryFeed
     case endCallSession
     case getCallMediaToken

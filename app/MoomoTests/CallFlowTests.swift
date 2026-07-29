@@ -57,6 +57,7 @@ final class CallFlowTests: XCTestCase {
     private func makeFlow(
         mode: CallMode = .voice,
         preferred: DiscoveryCandidate? = nil,
+        incoming: CallInvite? = nil,
         callDuration: TimeInterval = CallSession.speedCallDuration,
         media: MockCallMediaService = MockCallMediaService(),
         permissionsGranted: Bool = true,
@@ -65,6 +66,7 @@ final class CallFlowTests: XCTestCase {
         CallFlowModel(
             mode: mode,
             preferred: preferred,
+            incoming: incoming,
             calls: calls,
             matches: matches,
             safety: safety,
@@ -121,6 +123,70 @@ final class CallFlowTests: XCTestCase {
         XCTAssertEqual(finishedCount, 1, "Cancelling the search must finish the flow")
         let history = await calls.history()
         XCTAssertTrue(history.isEmpty, "A call that never connected is not history")
+    }
+
+    // MARK: - Incoming rings
+
+    private func incomingInvite(mode: CallMode = .video) -> CallInvite {
+        CallInvite(
+            id: kenji.id, caller: kenji, mode: mode,
+            expiresAt: Date().addingTimeInterval(10)
+        )
+    }
+
+    func testAcceptedRingSkipsSearchAndReachesActive() async {
+        let flow = makeFlow(mode: .video, incoming: incomingInvite())
+        flow.start()
+
+        guard case .connecting(let caller) = flow.stage else {
+            return XCTFail("An accepted ring must show who is calling immediately, got \(flow.stage)")
+        }
+        XCTAssertEqual(caller.id, kenji.id)
+
+        await settle(150)
+
+        guard case .active(let session) = flow.stage else {
+            return XCTFail("Expected an active call, got \(flow.stage)")
+        }
+        XCTAssertEqual(session.candidate.id, kenji.id, "the call is with the caller")
+        XCTAssertEqual(session.mode, .video, "the ring's mode is the call's mode")
+    }
+
+    func testUnavailableRingFailsWithTheFriendlyMessage() async {
+        // A blocked caller stands in for every lost accept — someone faster,
+        // an expired ring, a caller who left. All answer "unavailable".
+        calls = MockCallService(
+            searchLatency: .milliseconds(1),
+            connectLatency: .milliseconds(1),
+            isBlocked: { $0 == "u-featured" }
+        )
+        let flow = makeFlow(mode: .video, incoming: incomingInvite())
+        flow.start()
+        await settle(150)
+
+        guard case .failed(let failure) = flow.stage else {
+            return XCTFail("Expected the lost-ring failure, got \(flow.stage)")
+        }
+        XCTAssertEqual(failure.message, CallServiceError.inviteUnavailable.errorDescription)
+        XCTAssertFalse(failure.isPermissionDenied)
+
+        let history = await calls.history()
+        XCTAssertTrue(history.isEmpty, "a ring we lost never became a call")
+    }
+
+    func testIncomingRingRespectsThePermissionGate() async {
+        let flow = makeFlow(
+            mode: .video, incoming: incomingInvite(), permissionsGranted: false
+        )
+        flow.start()
+        await settle(100)
+
+        guard case .failed(let failure) = flow.stage else {
+            return XCTFail("Expected a permission failure, got \(flow.stage)")
+        }
+        XCTAssertTrue(failure.isPermissionDenied, "the failure must point at Settings")
+        let history = await calls.history()
+        XCTAssertTrue(history.isEmpty, "no accepting a call the microphone can't join")
     }
 
     // MARK: - Empty room

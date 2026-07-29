@@ -64,6 +64,9 @@ final class CallFlowModel: ObservableObject {
     let media: CallMediaService
 
     private let preferred: DiscoveryCandidate?
+    /// The accepted ring this flow answers, when it starts from the incoming
+    /// banner instead of a search. Nil is the outgoing (searching) journey.
+    private let incoming: CallInvite?
     private let calls: CallService
     private let matches: MatchService
     private let safety: SafetyService
@@ -89,6 +92,7 @@ final class CallFlowModel: ObservableObject {
     init(
         mode: CallMode,
         preferred: DiscoveryCandidate? = nil,
+        incoming: CallInvite? = nil,
         calls: CallService,
         matches: MatchService,
         safety: SafetyService,
@@ -103,6 +107,7 @@ final class CallFlowModel: ObservableObject {
     ) {
         self.mode = mode
         self.preferred = preferred
+        self.incoming = incoming
         self.calls = calls
         self.matches = matches
         self.safety = safety
@@ -143,18 +148,34 @@ final class CallFlowModel: ObservableObject {
 
     func start() {
         guard case .searching = stage, setupTask == nil else { return }
+        // An accepted ring already knows who is calling — show them straight
+        // away rather than a "finding someone" screen for someone found.
+        if let incoming {
+            stage = .connecting(incoming.caller)
+        }
         setupTask = Task { [weak self] in
             guard let self else { return }
 
             // Permission gate before matchmaking: pairing a real person with
             // someone whose microphone can never open wastes their time.
+            // Rings gate identically — accepting a call you can't speak in
+            // wastes the caller's ring window too.
             guard await permissions.ensurePermissions(for: mode) else {
                 stage = .failed(Self.permissionFailure(for: mode))
                 return
             }
 
             do {
-                let candidate = try await calls.findCandidate(mode: mode, preferring: preferred)
+                // An accepted ring races the other rung users server-side;
+                // winning hands back the caller with the session already
+                // created, exactly like an instant match — the connect path
+                // below is shared verbatim from there on.
+                let candidate: DiscoveryCandidate
+                if let incoming {
+                    candidate = try await calls.acceptInvite(incoming)
+                } else {
+                    candidate = try await calls.findCandidate(mode: mode, preferring: preferred)
+                }
                 guard !Task.isCancelled else { return }
                 stage = .connecting(candidate)
 

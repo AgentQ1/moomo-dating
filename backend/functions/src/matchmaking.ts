@@ -62,17 +62,19 @@ import {
   SPEED_CALL_SECONDS,
   QUEUE_ENTRY_TTL_MS,
   activityBucketFloor,
+  callInviteRef,
 } from "./shared";
 import {
   PublicProfile,
   isMutuallyCompatible,
   isBoosted,
 } from "./compatibility";
+import { fanOutRingInvites, sweepExpiredRingInvites } from "./ring";
 import { enforceRateLimit } from "./ratelimit";
 import { requireEnabled } from "./runtime";
 import { logEvent } from "./observability";
 
-interface PairedSession {
+export interface PairedSession {
   sessionId: string;
   mode: CallMode;
   startedAtMillis: number;
@@ -95,10 +97,22 @@ function shardCount(): number {
 const CANDIDATE_WINDOW = 10;
 
 /**
- * Creates the server-owned call session and retires both queue entries.
- * Runs inside the pairing transaction — never callable on its own.
+ * Waiting and matched entries age out on DIFFERENT clocks (see
+ * sweepStaleQueueEntries). A waiting entry past 2× the pairing TTL is a dead
+ * client. A matched entry's createdAt is its pairing time and the call it
+ * points at runs up to SPEED_CALL_SECONDS — it is presumed live (and its
+ * owner busy — the ring fan-out shares this heuristic) until the call clock
+ * plus reconnect grace has certainly expired.
  */
-function createCallSession(
+const WAITING_STALE_MS = 2 * QUEUE_ENTRY_TTL_MS;
+export const MATCHED_STALE_MS = (SPEED_CALL_SECONDS + 90) * 1000;
+
+/**
+ * Creates the server-owned call session and retires both queue entries.
+ * Runs inside the pairing transaction (and acceptCallInvite's, in ring.ts —
+ * exported for exactly that reuse) — never a callable on its own.
+ */
+export function createCallSession(
   tx: FirebaseFirestore.Transaction,
   a: ParticipantSummary,
   b: ParticipantSummary,
@@ -360,6 +374,14 @@ export const joinMatchmakingQueue = onCall(callable(20), async (request) => {
     ...(shardsScanned !== undefined ? { shardsScanned } : {}),
     ...(rejoined ? { rejoined } : {}),
   });
+  if (response.status === "waiting") {
+    // Nobody was waiting — ring a few compatible online users so their
+    // foreground app can offer this caller (ring.ts). Awaited so the invites
+    // exist before the client settles into its wait, but failure-isolated
+    // inside fanOutRingInvites: a broken fan-out degrades to the plain
+    // "waiting" experience, never to a failed join.
+    await fanOutRingInvites(uid, mode, preferredPeerId);
+  }
   return response;
 });
 
@@ -370,14 +392,40 @@ export const leaveMatchmakingQueue = onCall(callable(20), async (request) => {
   // in the queue by an outage brake.
   await db().runTransaction(async (tx) => {
     const entry = await tx.get(db().collection("matchmakingQueue").doc(uid));
+    const leavingWait = entry.exists && entry.get("status") === "waiting";
+
+    // The rings this wait fanned out die with it — a banner for a caller who
+    // already gave up is an invitation to an empty call. Read before any
+    // write (Admin transactions require all reads first).
+    const ringedUids = leavingWait && Array.isArray(entry.get("ringedUids"))
+      ? (entry.get("ringedUids") as unknown[]).filter(
+          (peer): peer is string => typeof peer === "string"
+        )
+      : [];
+    const invites = await Promise.all(
+      ringedUids.map((peer) => tx.get(callInviteRef(peer)))
+    );
+
+    const now = Timestamp.now();
     // Only a waiting entry is removed. A `matched` entry means pairing has
     // already happened — leaving then is handled by ending the call.
-    if (entry.exists && entry.get("status") === "waiting") {
+    if (leavingWait) {
       tx.delete(entry.ref);
+    }
+    for (const invite of invites) {
+      // Cancel only THIS caller's still-ringing invites — never a newer
+      // ring someone else already has out to the same callee.
+      if (
+        invite.exists &&
+        invite.get("status") === "ringing" &&
+        invite.get("callerUid") === uid
+      ) {
+        tx.update(invite.ref, { status: "cancelled", updatedAt: now });
+      }
     }
     tx.set(
       db().collection("publicProfiles").doc(uid),
-      { wantsToTalk: false, updatedAt: Timestamp.now() },
+      { wantsToTalk: false, updatedAt: now },
       { merge: true }
     );
   });
@@ -406,15 +454,10 @@ async function sweepStaleQueueEntries(): Promise<number> {
   // Bounded batches so one run can clear a large backlog without ever
   // becoming an unbounded scan inside a single transaction.
   //
-  // Waiting and matched entries age out on DIFFERENT clocks. A waiting entry
-  // past 2× the pairing TTL is a dead client. A matched entry's createdAt is
-  // its pairing time and the call it points at runs up to SPEED_CALL_SECONDS
-  // — sweeping it mid-call would void join idempotency (a duplicate join
+  // The thresholds live at module scope (see their comment). Sweeping a
+  // matched entry mid-call would void join idempotency — a duplicate join
   // could then double-book someone who is on a live call into a second
-  // session), so matched entries are retired only after the call clock plus
-  // reconnect grace has certainly expired.
-  const WAITING_STALE_MS = 2 * QUEUE_ENTRY_TTL_MS;
-  const MATCHED_STALE_MS = (SPEED_CALL_SECONDS + 90) * 1000;
+  // session — so matched entries wait out MATCHED_STALE_MS.
   for (let batch = 0; batch < 10; batch += 1) {
     const swept = await db().runTransaction(async (tx) => {
       const [staleWaiting, staleMatched] = await Promise.all([
@@ -462,5 +505,7 @@ export const sweepMatchmakingQueue = onSchedule(
   async () => {
     const swept = await sweepStaleQueueEntries();
     logEvent("matchmaking_sweep", { swept });
+    // Same hygiene cadence for ring invites nobody answered (ring.ts).
+    await sweepExpiredRingInvites();
   }
 );

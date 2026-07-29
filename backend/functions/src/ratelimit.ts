@@ -35,6 +35,7 @@ export interface RateLimit {
 /** One place to see (and test) every ceiling. */
 export const RATE_LIMITS = {
   joinMatchmakingQueue: { limit: 12, windowMs: 60_000 },
+  acceptCallInvite: { limit: 20, windowMs: 60_000 },
   getCallMediaToken: { limit: 10, windowMs: 60_000 },
   submitCallDecision: { limit: 20, windowMs: 60_000 },
   activateBoost: { limit: 5, windowMs: 60_000 },
