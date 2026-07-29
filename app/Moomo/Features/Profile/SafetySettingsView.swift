@@ -127,7 +127,7 @@ struct SafetySettingsView: View {
 
     private var howItWorks: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
-            Text("HOW MOOMO KEEPS YOU SAFE")
+            Text("HOW BAYBE KEEPS YOU SAFE")
                 .font(Typography.sectionLabel)
                 .tracking(Typography.sectionTracking)
                 .foregroundStyle(Palette.ink)
