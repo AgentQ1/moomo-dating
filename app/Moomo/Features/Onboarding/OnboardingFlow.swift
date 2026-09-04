@@ -109,6 +109,7 @@ struct OnboardingFlow: View {
         case .dateOfBirth: DateOfBirthStep(model: model)
         case .gender: GenderStep(model: model)
         case .interestedIn: InterestedInStep(model: model)
+        case .datingIntention: DatingIntentionStep(model: model)
         case .location: LocationStep(model: model)
         case .photos: PhotosStep(model: model)
         case .bio: BioStep(model: model)

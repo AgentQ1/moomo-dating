@@ -3,39 +3,55 @@ import SwiftUI
 // MARK: - Phone entry row
 
 /// The phone input row from the welcome reference: dial code with a chevron,
-/// a hairline divider, a receiver glyph, and the number field — underlined.
+/// an upright rule, a receiver glyph, and the number field. The rule under the
+/// row is drawn by `WelcomeView` rather than here, so the row itself is only
+/// as tall as the reference's controls.
+///
+/// Laid out by coordinate rather than by `HStack` spacing: every position was
+/// read off the reference as glyph ink, and the distance from a frame's edge
+/// to its ink differs per glyph, so spacings would not reproduce it.
 struct PhoneEntryRow: View {
     @ObservedObject var model: PhoneAuthModel
     var isFocused: FocusState<Bool>.Binding
 
     var body: some View {
-        VStack(spacing: Space.sm) {
-            HStack(spacing: Space.sm) {
-                countrySelector
-
-                Rectangle()
-                    .fill(Palette.separator)
-                    .frame(width: 1, height: 30)
-
-                Image(systemName: "phone.fill")
-                    .font(.system(size: 18))
-                    .foregroundStyle(Palette.textTertiary)
-                    .padding(.leading, Space.xs)
-
-                TextField("Enter phone number", text: $model.nationalNumber)
-                    .font(.system(size: 19, weight: .regular))
-                    .foregroundStyle(Palette.ink)
-                    .keyboardType(.phonePad)
-                    .textContentType(.telephoneNumber)
-                    .focused(isFocused)
-                    .disabled(model.isBusy)
-                    .accessibilityIdentifier("phone.number")
-            }
+        ZStack(alignment: .leading) {
+            countrySelector
+                .offset(x: WelcomeMetrics.dialCodeX, y: WelcomeMetrics.dialCodeY)
 
             Rectangle()
-                .fill(Palette.separator)
-                .frame(height: 1)
+                .fill(Palette.welcomeDivider)
+                .frame(width: 1, height: WelcomeMetrics.phoneRowHeight)
+                .offset(x: WelcomeMetrics.dividerX, y: WelcomeMetrics.dividerY)
+
+            Image(systemName: "phone.fill")
+                .font(.system(size: 17))
+                .foregroundStyle(Palette.welcomeFieldIcon)
+                .offset(x: WelcomeMetrics.fieldIconX, y: WelcomeMetrics.fieldIconY)
+
+            TextField("", text: $model.nationalNumber, prompt: placeholder)
+                .font(Typography.welcomePhoneField)
+                .foregroundStyle(Palette.welcomeInk)
+                .keyboardType(.phonePad)
+                .textContentType(.telephoneNumber)
+                .focused(isFocused)
+                .disabled(model.isBusy)
+                .frame(width: WelcomeMetrics.numberFieldWidth, alignment: .leading)
+                .offset(x: WelcomeMetrics.numberFieldX)
+                .accessibilityIdentifier("phone.number")
         }
+        // Fill the row: without this the stack shrinks to its widest child
+        // and the whole thing is centred, throwing every measured x out.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: WelcomeMetrics.phoneRowHeight)
+    }
+
+    /// A `prompt` rather than a title, so the placeholder takes the
+    /// reference's grey instead of the system's.
+    private var placeholder: Text {
+        Text("Enter phone number")
+            .font(Typography.welcomePhoneField)
+            .foregroundColor(Palette.welcomePlaceholder)
     }
 
     private var countrySelector: some View {
@@ -48,13 +64,13 @@ struct PhoneEntryRow: View {
                 }
             }
         } label: {
-            HStack(spacing: Space.xxs) {
+            HStack(spacing: WelcomeMetrics.dialCodeChevronGap) {
                 Text(model.countryCode.dialCode)
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Palette.ink)
+                    .font(Typography.welcomeDialCode)
+                    .foregroundStyle(Palette.welcomeInk)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Palette.ink)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Palette.welcomeInk)
             }
         }
         .disabled(model.isBusy)
@@ -62,29 +78,30 @@ struct PhoneEntryRow: View {
     }
 }
 
-/// The coral "Verification" CTA beneath the phone row.
+/// The magenta "Verification" CTA beneath the phone row.
 struct VerificationButton: View {
     var isLoading: Bool
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: Space.xs) {
+            HStack(spacing: WelcomeMetrics.ctaIconToLabel) {
                 if isLoading {
                     ProgressView()
                         .progressViewStyle(.circular)
                         .tint(.white)
                 } else {
                     Image(systemName: "iphone")
-                        .font(.system(size: 18, weight: .medium))
+                        .font(.system(size: 22, weight: .regular))
                     Text("Verification")
-                        .font(.system(size: 19, weight: .semibold))
+                        .font(Typography.welcomeCTA)
                 }
             }
             .foregroundStyle(.white)
+            .offset(WelcomeMetrics.ctaContentOffset)
             .frame(maxWidth: .infinity)
-            .frame(height: 54)
-            .background(Capsule().fill(Palette.flamingo))
+            .frame(height: WelcomeMetrics.ctaHeight)
+            .background(Capsule().fill(Palette.verificationMagenta))
         }
         .buttonStyle(.plain)
         .disabled(isLoading)

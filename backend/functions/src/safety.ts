@@ -24,6 +24,7 @@ import {
   UNMATCH_REASONS,
   REPORTS_PER_DAY_LIMIT,
   BLOCKS_PER_DAY_LIMIT,
+  readStoredCallMode,
 } from "./shared";
 import { logEvent } from "./observability";
 
@@ -110,7 +111,7 @@ export const blockUser = onCall(callable(10), async (request) => {
       tx.set(historyRef(uid, session.id), {
         sessionId: session.id,
         peer: participants[blockedUserId] ?? { uid: blockedUserId, displayName },
-        mode: session.get("mode") ?? "voice",
+        mode: readStoredCallMode(session.get("mode")),
         startedAt,
         durationSeconds,
         endReason: "blocked",
@@ -123,7 +124,7 @@ export const blockUser = onCall(callable(10), async (request) => {
       tx.set(historyRef(blockedUserId, session.id), {
         sessionId: session.id,
         peer: participants[uid] ?? { uid, displayName: "Someone" },
-        mode: session.get("mode") ?? "voice",
+        mode: readStoredCallMode(session.get("mode")),
         startedAt,
         durationSeconds,
         endReason: "ended",

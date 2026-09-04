@@ -43,9 +43,7 @@ struct CallSearchingView: View {
                 .foregroundStyle(Palette.textOnDark)
                 .padding(.top, Space.xxl)
 
-            Text(mode == .video
-                 ? "Matching you for an instant video chat."
-                 : "Matching you for a real voice conversation.")
+            Text("Matching you for an instant video chat.")
                 .font(Typography.body)
                 .foregroundStyle(Palette.textOnDarkSecondary)
                 .padding(.top, Space.xxs)

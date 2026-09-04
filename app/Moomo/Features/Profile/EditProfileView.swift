@@ -46,6 +46,19 @@ struct EditProfileView: View {
                     .accessibilityIdentifier("editProfile.bio")
                 }
 
+                section("Looking for") {
+                    DatingIntentionOptions(selection: $draft.datingIntention)
+
+                    Label(
+                        "Baybe only introduces you to people whose answer fits yours.",
+                        systemImage: "person.2.fill"
+                    )
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, Space.xs)
+                }
+
                 section("Interests") {
                     FlowLayout(spacing: Space.xs) {
                         ForEach(InterestCatalog.options, id: \.self) { option in

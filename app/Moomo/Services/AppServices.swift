@@ -127,6 +127,25 @@ final class AppServices: ObservableObject {
     #endif
 
     #if DEBUG
+    /// What the mock world puts in Discover. `-ui-testing-empty-discovery`
+    /// hands back an empty pool, so a UI test can stand on the one screen
+    /// state that has no hero and check there is still a way into a call.
+    private static var mockDiscoveryState: DiscoveryState {
+        ProcessInfo.processInfo.arguments.contains("-ui-testing-empty-discovery")
+            ? .empty
+            : .sample
+    }
+
+    /// How long the mock takes to answer. `-ui-testing-slow-discovery`
+    /// stretches it, so the layout test can measure Discover while the
+    /// skeleton is unambiguously still up and again once the hero has landed,
+    /// rather than racing the default beat.
+    private static var mockDiscoveryLatency: Duration {
+        ProcessInfo.processInfo.arguments.contains("-ui-testing-slow-discovery")
+            ? .seconds(6)
+            : .milliseconds(600)
+    }
+
     /// The wired-up mock graph, for tests, previews, and the no-backend
     /// simulator. The closures stand in for the backend triggers: they are
     /// the only cross-service coupling, and they run the same direction the
@@ -164,7 +183,10 @@ final class AppServices: ObservableObject {
 
         return AppServices(
             discovery: BlockFilteringDiscoveryService(
-                base: MockDiscoveryService(),
+                base: MockDiscoveryService(
+                    latency: mockDiscoveryLatency,
+                    result: .success(mockDiscoveryState)
+                ),
                 safety: safety
             ),
             calls: calls,

@@ -91,11 +91,11 @@ enum FirebaseBootstrap {
               let provider = AppCheckDebugProvider(app: app) else { return }
         print("""
         ─────────────────────────────────────────────────────────────────
-        [Moomo] App Check DEBUG token for this install:
-        [Moomo]   \(provider.currentDebugToken())
-        [Moomo] Register it once: Firebase console → moomo-c7a37 →
-        [Moomo]   App Check → Apps → Moomo (iOS) → ⋮ → Manage debug tokens.
-        [Moomo] Unregistered, every callable answers 'unauthenticated'.
+        [Baybe] App Check DEBUG token for this install:
+        [Baybe]   \(provider.currentDebugToken())
+        [Baybe] Register it once: Firebase console → moomo-c7a37 →
+        [Baybe]   App Check → Apps → Moomo (iOS) → ⋮ → Manage debug tokens.
+        [Baybe] Unregistered, every callable answers 'unauthenticated'.
         ─────────────────────────────────────────────────────────────────
         """)
         #endif

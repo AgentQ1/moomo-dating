@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Chat modes
 
-/// One of the two mode tiles under the hero ("Video Match", "Real Talk").
+/// One of the two mode tiles under the hero ("Video Match", "Go Play").
 struct ChatModeTile: View {
     var title: String
     var subtitle: String
@@ -17,14 +17,19 @@ struct ChatModeTile: View {
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 0) {
+                // Both tiles reserve one title line and two subtitle lines
+                // whatever their copy measures to, so the two sit at identical
+                // dimensions and neither reflows once it is on screen.
                 Text(title)
                     .font(Typography.cardTitle)
                     .foregroundStyle(Palette.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
 
                 Text(subtitle)
                     .font(Typography.body)
                     .foregroundStyle(Palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2, reservesSpace: true)
                     .padding(.top, Space.xxs)
 
                 Spacer(minLength: Space.sm)
@@ -32,11 +37,12 @@ struct ChatModeTile: View {
                 ZStack {
                     Circle()
                         .fill(.white.opacity(0.85))
-                        .frame(width: 44, height: 44)
+                        .frame(width: Size.chatModeTileIconWell, height: Size.chatModeTileIconWell)
                     Image(systemName: icon)
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(iconColor)
                 }
+                .frame(width: Size.chatModeTileIconWell, height: Size.chatModeTileIconWell)
             }
             .padding(Space.md)
             .frame(maxWidth: .infinity, alignment: .leading)

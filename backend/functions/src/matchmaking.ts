@@ -41,6 +41,12 @@
  *     already filters stale entries by TTL, so hygiene needs no join-time
  *     hook for correctness.
  *
+ * Within the candidate window, pairing prefers CLOSER people (proximity.ts).
+ * That is an ordering inside the window the FIFO scan already produced — it
+ * cannot pair anyone compatibility, a block or a pass would refuse, and a
+ * waiter with no shared location keeps their oldest-first place rather than
+ * being skipped.
+ *
  * Retries are bounded (maxAttempts: 5) and every attempt beyond the first is
  * logged as `matchmaking_txn_retry` — the observability plan alerts when the
  * retry rate climbs (contention onset).
@@ -57,7 +63,7 @@ import {
   hasPassedEitherWay,
   participantSummary,
   ParticipantSummary,
-  CALL_MODES,
+  isSupportedCallMode,
   CallMode,
   SPEED_CALL_SECONDS,
   QUEUE_ENTRY_TTL_MS,
@@ -69,6 +75,7 @@ import {
   isMutuallyCompatible,
   isBoosted,
 } from "./compatibility";
+import { loadCoarseLocations, sortByProximity } from "./proximity";
 import { fanOutRingInvites, sweepExpiredRingInvites } from "./ring";
 import { enforceRateLimit } from "./ratelimit";
 import { requireEnabled } from "./runtime";
@@ -163,7 +170,9 @@ export function createCallSession(
 export const joinMatchmakingQueue = onCall(callable(20), async (request) => {
   const uid = requireAuth(request);
   const mode = requireString(request.data?.mode, "mode") as CallMode;
-  if (!CALL_MODES.includes(mode)) {
+  // Voice-only is retired: a new queue entry may only ever be a video call.
+  // Stored "voice" entries and sessions are still read everywhere else.
+  if (!isSupportedCallMode(mode)) {
     throw new HttpsError("invalid-argument", "Invalid mode.");
   }
   const preferredPeerId =
@@ -297,13 +306,32 @@ export const joinMatchmakingQueue = onCall(callable(20), async (request) => {
       );
       const mine = profiles.get(uid);
 
+      // Private coarse positions for the same set, on the same terms:
+      // non-transactional (a peer's location refresh must not abort this
+      // pairing) and failure-absorbing (an unreadable location means neutral
+      // ranking, never a failed join).
+      const locations = await loadCoarseLocations(profileIds, now);
+      const myLocation = locations.get(uid) ?? null;
+
       // Ranking: an explicit "Talk to Him" invitation first, then waiting
       // users with an ACTIVE boost (what the boost screen promises), then
-      // everyone else — both groups oldest-first.
+      // everyone else — both groups oldest-first, then CLOSEST-first within
+      // that.
+      //
+      // Proximity reorders the window; it never widens or narrows it. The
+      // window is already the ~10 oldest compatible waiters (CANDIDATE_WINDOW),
+      // so the worst thing distance can cost anyone is being passed over by a
+      // nearer person inside a bounded queue head — FIFO fairness survives at
+      // the window boundary, which is the level it was ever guaranteed at
+      // (the shard scan already made it approximate). Anyone whose location is
+      // unknown scores neutral and holds their oldest-first position, so the
+      // queue behaves exactly as it did today for accounts that share nothing.
+      const byProximity = (ids: string[]) =>
+        sortByProximity(ids, myLocation, (id) => locations.get(id) ?? null);
       const rankedCandidates = [
         ...preferredCandidates,
-        ...fifoCandidates.filter((id) => isBoosted(profiles.get(id), now)),
-        ...fifoCandidates.filter((id) => !isBoosted(profiles.get(id), now)),
+        ...byProximity(fifoCandidates.filter((id) => isBoosted(profiles.get(id), now))),
+        ...byProximity(fifoCandidates.filter((id) => !isBoosted(profiles.get(id), now))),
       ];
 
       // First candidate who is mutually compatible, not blocked either way,

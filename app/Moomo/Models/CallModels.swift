@@ -2,11 +2,28 @@ import Foundation
 
 // MARK: - Mode
 
-/// The two ways a speed call can run. "Real Talk" is voice; "Video Match" and
-/// the hero card's "Talk to Him/Her/Them" are video.
+/// How a speed call runs.
+///
+/// `video` is the only mode the product offers: "Video Match", "Go Play", and
+/// the hero card's "Nearby" all start one, and every video call carries the
+/// microphone as well as the camera.
+///
+/// `voice` is the retired voice-only product ("Speed Talk"). It is kept as a
+/// **decode-only** case: `users/{uid}/callHistory` and old `callSessions`
+/// documents in production still say `"voice"`, and dropping the case would
+/// turn those into decode failures or a lying mode label on the Calls tab.
+/// Nothing may ever *start* one — `isSupported` is the gate, and the backend
+/// refuses a voice queue join, ring, or accept independently.
 enum CallMode: String, Codable, Sendable, CaseIterable {
     case voice
     case video
+
+    /// False for modes that exist only to read old records. The one place a
+    /// mode may enter a live flow (start, ring, accept) must check this.
+    var isSupported: Bool { self == .video }
+
+    /// The mode every new call runs in.
+    static let current: CallMode = .video
 
     var label: String {
         switch self {

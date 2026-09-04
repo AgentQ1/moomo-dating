@@ -1,7 +1,12 @@
 import Foundation
 import SwiftUI
 
-/// The steps of onboarding, in order.
+/// The steps of onboarding.
+///
+/// Declaration order is NOT flow order — `flow` is. These raw values are
+/// persisted inside `OnboardingDraft.currentStep`, so inserting a case in the
+/// middle would renumber every later one and resume an in-flight user on the
+/// wrong step. New steps are therefore appended here and positioned in `flow`.
 enum OnboardingStep: Int, CaseIterable, Identifiable, Codable {
     case name
     case dateOfBirth
@@ -15,8 +20,29 @@ enum OnboardingStep: Int, CaseIterable, Identifiable, Codable {
     case notifications
     case safety
     case review
+    /// Appended (raw value 12), shown fourth. See the note above.
+    case datingIntention
 
     var id: Int { rawValue }
+
+    /// The order the steps are actually presented in. Dating intention sits
+    /// with the other matching filter it works alongside — both narrow who you
+    /// will ever be paired with, so they are asked together.
+    static let flow: [OnboardingStep] = [
+        .name,
+        .dateOfBirth,
+        .gender,
+        .interestedIn,
+        .datingIntention,
+        .location,
+        .photos,
+        .bio,
+        .interests,
+        .cameraAndMic,
+        .notifications,
+        .safety,
+        .review
+    ]
 
     var title: String {
         switch self {
@@ -24,6 +50,7 @@ enum OnboardingStep: Int, CaseIterable, Identifiable, Codable {
         case .dateOfBirth: "When's your birthday?"
         case .gender: "How do you identify?"
         case .interestedIn: "Who would you like to meet?"
+        case .datingIntention: "What are you looking for?"
         case .location: "Where are you?"
         case .photos: "Add your photos"
         case .bio: "Tell us about you"
@@ -41,6 +68,7 @@ enum OnboardingStep: Int, CaseIterable, Identifiable, Codable {
         case .dateOfBirth: "You must be 18 or older. Your birthday stays private — only your age is shown."
         case .gender: "Shown on your profile."
         case .interestedIn: "Pick as many as you like."
+        case .datingIntention: "We'll only introduce you to people whose answer fits yours."
         case .location: "City only. Baybe never shares your exact location."
         case .photos: "Add at least one. Your first photo is your main one."
         case .bio: "A sentence or two. What should someone know before they call you?"
@@ -98,7 +126,7 @@ final class OnboardingModel: ObservableObject {
     /// by the view that just uploaded it.
     var photoDisplayService: PhotoUploadService { photoService }
 
-    var steps: [OnboardingStep] { OnboardingStep.allCases }
+    var steps: [OnboardingStep] { OnboardingStep.flow }
 
     var currentIndex: Int {
         steps.firstIndex(of: draft.currentStep) ?? 0
@@ -320,6 +348,14 @@ final class OnboardingModel: ObservableObject {
 
         case .interestedIn:
             return profile.interestedIn.isEmpty ? "Please choose at least one." : nil
+
+        case .datingIntention:
+            // Required of new accounts so the matching filter has something to
+            // work with. Deliberately NOT added to
+            // `ProfileRequirements.missingFields`: that gates entry to the app
+            // for EVERY account, and every existing profile has nil here —
+            // adding it would bounce the whole userbase back into onboarding.
+            return profile.datingIntention == nil ? "Please choose what you're looking for." : nil
 
         case .location:
             return profile.location == nil ? "Please set your city." : nil

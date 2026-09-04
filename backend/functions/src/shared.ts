@@ -100,8 +100,41 @@ export const UNMATCH_REASONS = [
   "someone_in_danger",
 ] as const;
 
+/**
+ * Every call mode that has ever been stored.
+ *
+ * "voice" is the retired voice-only product (the app's "Speed Talk"). Live
+ * `callSessions`, `matchmakingQueue` entries, `callInvites`, and
+ * `users/{uid}/callHistory` documents in production still carry it, so
+ * anything that READS a stored mode must keep accepting it — dropping it
+ * would make old history undecodable and old sessions unendable.
+ */
 export const CALL_MODES = ["voice", "video"] as const;
 export type CallMode = (typeof CALL_MODES)[number];
+
+/**
+ * The modes a NEW call may be created in. Voice-only is gone from the
+ * product: no queue join, ring, or invite accept may mint one, while every
+ * read path above still tolerates the stored value. Mirrors the client's
+ * `CallMode.isSupported`.
+ */
+export const SUPPORTED_CALL_MODES = ["video"] as const;
+export type SupportedCallMode = (typeof SUPPORTED_CALL_MODES)[number];
+
+/** True for a mode a new call may actually be created in. */
+export function isSupportedCallMode(mode: unknown): mode is SupportedCallMode {
+  return (
+    typeof mode === "string" &&
+    (SUPPORTED_CALL_MODES as readonly string[]).includes(mode)
+  );
+}
+
+/** How a stored mode is read back. Unknown/absent reads as the live mode. */
+export function readStoredCallMode(mode: unknown): CallMode {
+  return typeof mode === "string" && (CALL_MODES as readonly string[]).includes(mode)
+    ? (mode as CallMode)
+    : "video";
+}
 
 export const END_REASONS = ["ended", "timeExpired", "blocked"] as const;
 export type EndReason = (typeof END_REASONS)[number];

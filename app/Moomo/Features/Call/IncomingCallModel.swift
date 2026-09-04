@@ -38,6 +38,19 @@ final class IncomingCallModel: ObservableObject {
 
     private func show(_ invite: CallInvite?) {
         dismissTask?.cancel()
+
+        // A ring in the retired voice-only mode is not something this app can
+        // answer any more. Rather than show an "Incoming Voice Call" banner
+        // whose accept button leads nowhere, decline it for the caller — they
+        // stop waiting on us and their fan-out moves on. (New voice rings
+        // cannot be created; this covers one already in flight across a
+        // client update, and expires harmlessly if the decline never lands.)
+        if let invite, !invite.mode.isSupported {
+            self.invite = nil
+            Task { [calls] in await calls.declineInvite(invite) }
+            return
+        }
+
         self.invite = invite
         guard let invite else { return }
 

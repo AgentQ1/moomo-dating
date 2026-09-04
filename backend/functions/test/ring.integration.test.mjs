@@ -86,14 +86,14 @@ describe('ring fan-out — a waiting join rings compatible online users', () => 
     await seedCaller();
     await seedProfile(BOB);
 
-    const join = await joinQueue(asUser(CALLER, { mode: 'voice' }));
+    const join = await joinQueue(asUser(CALLER, { mode: 'video' }));
     assert.equal(join.status, 'waiting');
 
     const invite = await db.doc(`callInvites/${BOB}`).get();
     assert.ok(invite.exists, 'the online compatible user is rung');
     assert.equal(invite.get('uid'), BOB);
     assert.equal(invite.get('callerUid'), CALLER);
-    assert.equal(invite.get('mode'), 'voice');
+    assert.equal(invite.get('mode'), 'video');
     assert.equal(invite.get('status'), 'ringing');
     assert.deepEqual(
       invite.get('caller'),
@@ -129,7 +129,7 @@ describe('ring fan-out — a waiting join rings compatible online users', () => 
     await seedProfile('unwanting-ring', { gender: 'man', interestedIn: ['men'] });
     await seedProfile(BOB);
 
-    await joinQueue(asUser(CALLER, { mode: 'voice' }));
+    await joinQueue(asUser(CALLER, { mode: 'video' }));
 
     assert.deepEqual(await ringedIds(), [BOB], 'only the mutually compatible user rings');
   });
@@ -145,7 +145,7 @@ describe('ring fan-out — a waiting join rings compatible online users', () => 
     await db.doc(`passes/${CALLER}/passed/passed-by-caller`).set({ createdAt: Timestamp.now() });
     await db.doc(`passes/passed-the-caller/passed/${CALLER}`).set({ createdAt: Timestamp.now() });
 
-    await joinQueue(asUser(CALLER, { mode: 'voice' }));
+    await joinQueue(asUser(CALLER, { mode: 'video' }));
 
     assert.deepEqual(await ringedIds(), [BOB], 'only the unexcluded stranger rings');
   });
@@ -159,7 +159,7 @@ describe('ring fan-out — a waiting join rings compatible online users', () => 
     const now = Timestamp.now();
     await db.doc('matchmakingQueue/busy-ring').set({
       uid: 'busy-ring',
-      mode: 'voice',
+      mode: 'video',
       status: 'matched',
       sessionId: 'live-elsewhere',
       createdAt: now,
@@ -167,7 +167,7 @@ describe('ring fan-out — a waiting join rings compatible online users', () => 
     });
     await seedProfile(BOB);
 
-    await joinQueue(asUser(CALLER, { mode: 'voice' }));
+    await joinQueue(asUser(CALLER, { mode: 'video' }));
 
     assert.deepEqual(await ringedIds(), [BOB], 'neither the offline nor the busy user rings');
   });
@@ -178,7 +178,7 @@ describe('ring fan-out — a waiting join rings compatible online users', () => 
       await seedProfile(`crowd-ring-${String(i).padStart(2, '0')}`);
     }
 
-    await joinQueue(asUser(CALLER, { mode: 'voice' }));
+    await joinQueue(asUser(CALLER, { mode: 'video' }));
 
     assert.equal((await ringedIds()).length, RING_FANOUT_LIMIT);
     const entry = await db.doc(`matchmakingQueue/${CALLER}`).get();
@@ -198,7 +198,7 @@ describe('ring fan-out — a waiting join rings compatible online users', () => 
       updatedAt: Timestamp.now(),
     });
 
-    const join = await joinQueue(asUser(CALLER, { mode: 'voice', preferredPeerId: BOB }));
+    const join = await joinQueue(asUser(CALLER, { mode: 'video', preferredPeerId: BOB }));
 
     assert.equal(join.status, 'waiting', 'he is not in the queue, so no instant pair');
     assert.equal((await db.doc(`callInvites/${BOB}`).get()).get('status'), 'ringing');
@@ -207,11 +207,11 @@ describe('ring fan-out — a waiting join rings compatible online users', () => 
   test('a decline starts the same-caller cooldown — no immediate re-ring', async () => {
     await seedCaller();
     await seedProfile(BOB);
-    await joinQueue(asUser(CALLER, { mode: 'voice' }));
+    await joinQueue(asUser(CALLER, { mode: 'video' }));
     await decline(asUser(BOB));
     await leaveQueue(asUser(CALLER));
 
-    const rejoin = await joinQueue(asUser(CALLER, { mode: 'voice' }));
+    const rejoin = await joinQueue(asUser(CALLER, { mode: 'video' }));
 
     assert.equal(rejoin.status, 'waiting');
     assert.equal(
@@ -231,7 +231,7 @@ describe('ring fan-out — a waiting join rings compatible online users', () => 
     await db.doc(`callInvites/${BOB}`).set({
       uid: BOB,
       callerUid: DAVE,
-      mode: 'voice',
+      mode: 'video',
       status: 'declined',
       createdAt: secondsAgo(31),
       expiresAt: secondsAgo(21),
@@ -239,7 +239,7 @@ describe('ring fan-out — a waiting join rings compatible online users', () => 
       recentCallers: { [CALLER]: secondsAgo(60) },
     });
 
-    const rejoin = await joinQueue(asUser(CALLER, { mode: 'voice', preferredPeerId: BOB }));
+    const rejoin = await joinQueue(asUser(CALLER, { mode: 'video', preferredPeerId: BOB }));
 
     assert.equal(rejoin.status, 'waiting');
     const invite = await db.doc(`callInvites/${BOB}`).get();
@@ -255,7 +255,7 @@ describe('ring fan-out — a waiting join rings compatible online users', () => 
     await db.doc(`callInvites/${BOB}`).set({
       uid: BOB,
       callerUid: DAVE,
-      mode: 'voice',
+      mode: 'video',
       status: 'declined',
       createdAt: secondsAgo(31),
       expiresAt: secondsAgo(21),
@@ -263,7 +263,7 @@ describe('ring fan-out — a waiting join rings compatible online users', () => 
       recentCallers: { [CALLER]: secondsAgo(130) },
     });
 
-    const rejoin = await joinQueue(asUser(CALLER, { mode: 'voice', preferredPeerId: BOB }));
+    const rejoin = await joinQueue(asUser(CALLER, { mode: 'video', preferredPeerId: BOB }));
 
     assert.equal(rejoin.status, 'waiting');
     const invite = await db.doc(`callInvites/${BOB}`).get();
@@ -282,7 +282,7 @@ describe('acceptCallInvite — the first accepter wins, atomically', () => {
     await seedCaller();
     await seedProfile(BOB);
     await seedProfile(DAVE);
-    await joinQueue(asUser(CALLER, { mode: 'voice' }));
+    await joinQueue(asUser(CALLER, { mode: 'video' }));
     assert.deepEqual(await ringedIds(), [BOB, DAVE].sort(), 'precondition: both ring');
 
     const result = await accept(asUser(BOB));
@@ -294,7 +294,7 @@ describe('acceptCallInvite — the first accepter wins, atomically', () => {
       "exactly joinMatchmakingQueue's matched session payload shape"
     );
     const { session } = result;
-    assert.equal(session.mode, 'voice');
+    assert.equal(session.mode, 'video');
     assert.equal(session.maxDurationSeconds, 180);
     assert.equal(typeof session.startedAtMillis, 'number');
     assert.deepEqual(Object.keys(session.participants).sort(), [BOB, CALLER].sort());
@@ -326,7 +326,7 @@ describe('acceptCallInvite — the first accepter wins, atomically', () => {
     for (const uid of [BOB, DAVE, EVAN]) {
       await seedProfile(uid);
     }
-    await joinQueue(asUser(CALLER, { mode: 'voice' }));
+    await joinQueue(asUser(CALLER, { mode: 'video' }));
     assert.equal((await ringedIds()).length, 3, 'precondition: all three ring');
 
     const results = await Promise.all(
@@ -354,7 +354,7 @@ describe('acceptCallInvite — the first accepter wins, atomically', () => {
   test('accept after the acceptance window closes is unavailable', async () => {
     await seedCaller();
     await seedProfile(BOB);
-    await joinQueue(asUser(CALLER, { mode: 'voice' }));
+    await joinQueue(asUser(CALLER, { mode: 'video' }));
     await db.doc(`callInvites/${BOB}`).update({ expiresAt: secondsAgo(1) });
 
     const result = await accept(asUser(BOB));
@@ -372,7 +372,7 @@ describe('acceptCallInvite — the first accepter wins, atomically', () => {
     await seedCaller();
     await seedProfile(BOB);
     await seedProfile(DAVE);
-    await joinQueue(asUser(CALLER, { mode: 'voice' }));
+    await joinQueue(asUser(CALLER, { mode: 'video' }));
     assert.deepEqual(await ringedIds(), [BOB, DAVE].sort(), 'precondition: both ring');
 
     // The block lands between ring and accept — exactly the race the
@@ -392,14 +392,14 @@ describe('acceptCallInvite — the first accepter wins, atomically', () => {
   test('an accepter already on a live call is refused — no double-booking', async () => {
     await seedCaller();
     await seedProfile(BOB);
-    await joinQueue(asUser(CALLER, { mode: 'voice' }));
+    await joinQueue(asUser(CALLER, { mode: 'video' }));
 
     // Bob got busy after the ring went out.
     const now = Timestamp.now();
     await db.doc('callSessions/live-1').set({
       participantIds: [BOB, 'someone-else'],
       participants: {},
-      mode: 'voice',
+      mode: 'video',
       status: 'active',
       startedAt: now,
       maxDurationSeconds: 180,
@@ -407,7 +407,7 @@ describe('acceptCallInvite — the first accepter wins, atomically', () => {
     });
     await db.doc(`matchmakingQueue/${BOB}`).set({
       uid: BOB,
-      mode: 'voice',
+      mode: 'video',
       status: 'matched',
       sessionId: 'live-1',
       createdAt: now,
@@ -432,7 +432,7 @@ describe('decline, leave, and sweep — every ring dies cleanly', () => {
   test("decline is terminal for the invite and leaves the caller's wait untouched", async () => {
     await seedCaller();
     await seedProfile(BOB);
-    await joinQueue(asUser(CALLER, { mode: 'voice' }));
+    await joinQueue(asUser(CALLER, { mode: 'video' }));
 
     const result = await decline(asUser(BOB));
 
@@ -455,7 +455,7 @@ describe('decline, leave, and sweep — every ring dies cleanly', () => {
     await seedCaller();
     await seedProfile(BOB);
     await seedProfile(DAVE);
-    await joinQueue(asUser(CALLER, { mode: 'voice' }));
+    await joinQueue(asUser(CALLER, { mode: 'video' }));
     assert.deepEqual(await ringedIds(), [BOB, DAVE].sort(), 'precondition: both ring');
 
     await leaveQueue(asUser(CALLER));
@@ -475,7 +475,7 @@ describe('decline, leave, and sweep — every ring dies cleanly', () => {
     await seedCaller();
     await seedProfile(BOB);
     await seedProfile(DAVE);
-    await joinQueue(asUser(CALLER, { mode: 'voice' }));
+    await joinQueue(asUser(CALLER, { mode: 'video' }));
     await db.doc(`callInvites/${BOB}`).update({ expiresAt: secondsAgo(1) });
 
     await functions.sweepMatchmakingQueue.run({});
@@ -486,5 +486,39 @@ describe('decline, leave, and sweep — every ring dies cleanly', () => {
       'ringing',
       'a ring still inside its window survives the sweep'
     );
+  });
+});
+
+describe('retired call modes — a voice-only ring is unanswerable', () => {
+  beforeEach(clearFirestore);
+
+  test('accepting a still-ringing voice invite reads as no live ring', async () => {
+    // A ring created before Speed Talk was removed can still be sitting in
+    // `callInvites` when a client updates. Answering it would pair a video
+    // client into a voice session, so it reads as the same honest dead end
+    // as an expired ring — never as an error that leaks what happened.
+    await seedCaller();
+    await seedProfile(BOB);
+    await joinQueue(asUser(CALLER, { mode: 'video' }));
+
+    // Rewrite the live ring (and the caller's entry) as the retired mode,
+    // exactly as a pre-removal fan-out would have left them.
+    await db.doc(`callInvites/${BOB}`).update({ mode: 'voice' });
+    await db.doc(`matchmakingQueue/${CALLER}`).update({ mode: 'voice' });
+
+    assert.deepEqual(await accept(asUser(BOB)), { status: 'unavailable' });
+    const sessions = await db.collection('callSessions').get();
+    assert.equal(sessions.size, 0, 'no session may be created for a retired mode');
+  });
+
+  test('a video ring is still answerable', async () => {
+    await seedCaller();
+    await seedProfile(BOB);
+    await joinQueue(asUser(CALLER, { mode: 'video' }));
+
+    const result = await accept(asUser(BOB));
+
+    assert.equal(result.status, 'accepted');
+    assert.equal(result.session.mode, 'video');
   });
 });

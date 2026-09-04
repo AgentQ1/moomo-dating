@@ -19,16 +19,16 @@ final class CallCoordinatorTests: XCTestCase {
     func testStartCreatesAndPresentsOneFlow() async {
         let coordinator = makeCoordinator()
 
-        coordinator.start(mode: .voice)
+        coordinator.start(mode: .video)
 
         XCTAssertNotNil(coordinator.flow)
         XCTAssertTrue(coordinator.isPresenting)
-        XCTAssertEqual(coordinator.flow?.mode, .voice)
+        XCTAssertEqual(coordinator.flow?.mode, .video)
     }
 
     func testSecondStartReturnsToTheRunningCallInsteadOfStackingOne() async {
         let coordinator = makeCoordinator()
-        coordinator.start(mode: .voice)
+        coordinator.start(mode: .video)
         let first = coordinator.flow
 
         coordinator.minimise()
@@ -39,12 +39,12 @@ final class CallCoordinatorTests: XCTestCase {
             coordinator.flow, first,
             "Starting while a call runs must re-enter it, never stack a second"
         )
-        XCTAssertEqual(coordinator.flow?.mode, .voice, "The original call's mode wins")
+        XCTAssertIdentical(coordinator.flow, first, "The original call keeps the screen")
     }
 
     func testMinimiseHidesTheCoverButKeepsTheCallRunning() async {
         let coordinator = makeCoordinator()
-        coordinator.start(mode: .voice)
+        coordinator.start(mode: .video)
         // Let matchmaking finish (mock search + connect ≈ 2.3s).
         await settle(3000)
 
@@ -62,7 +62,7 @@ final class CallCoordinatorTests: XCTestCase {
 
     func testCallEndingWhileMinimisedRepresentsTheDecisionScreen() async {
         let coordinator = makeCoordinator()
-        coordinator.start(mode: .voice)
+        coordinator.start(mode: .video)
         await settle(3000)
         XCTAssertTrue(coordinator.hasActiveCall, "The call should be live by now")
 
@@ -115,7 +115,7 @@ final class CallCoordinatorTests: XCTestCase {
 
     func testAcceptIncomingWhileACallRunsIsIgnored() async {
         let coordinator = makeCoordinator()
-        coordinator.start(mode: .voice)
+        coordinator.start(mode: .video)
         let first = coordinator.flow
         coordinator.minimise()
 
@@ -125,7 +125,7 @@ final class CallCoordinatorTests: XCTestCase {
             coordinator.flow, first,
             "A ring answered while a call runs must never stack a second flow"
         )
-        XCTAssertEqual(coordinator.flow?.mode, .voice, "the running call keeps its mode")
+        XCTAssertEqual(coordinator.flow?.mode, .video, "the running call keeps its mode")
         XCTAssertFalse(
             coordinator.isPresenting,
             "an ignored ring must not yank a minimised call back on screen"
@@ -134,7 +134,7 @@ final class CallCoordinatorTests: XCTestCase {
 
     func testFinishingTheFlowTearsItDown() async {
         let coordinator = makeCoordinator()
-        coordinator.start(mode: .voice)
+        coordinator.start(mode: .video)
 
         coordinator.flow?.cancel()
         await settle(50)

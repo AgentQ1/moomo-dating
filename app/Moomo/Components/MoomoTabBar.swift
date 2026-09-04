@@ -136,8 +136,6 @@ struct MainTabView: View {
     @StateObject private var callsModel: CallsModel
     @StateObject private var matchesModel: MatchesModel
     @StateObject private var chatListModel: ChatListModel
-    @StateObject private var notificationsModel: NotificationsModel
-    @StateObject private var boostModel: BoostModel
     @StateObject private var incomingCallModel: IncomingCallModel
 
     @State private var selection: Tab = .discover
@@ -167,8 +165,9 @@ struct MainTabView: View {
             service: AppServices.retained(for: user).chat,
             safety: AppServices.retained(for: user).safety
         ))
-        _notificationsModel = StateObject(wrappedValue: NotificationsModel(service: AppServices.retained(for: user).notifications))
-        _boostModel = StateObject(wrappedValue: BoostModel(service: AppServices.retained(for: user).boost))
+        // Notifications and Boost keep their services and models, but Discover
+        // no longer carries an entry point to either, so nothing here holds
+        // one open. Re-add the StateObject when a screen presents them again.
         _incomingCallModel = StateObject(wrappedValue: IncomingCallModel(calls: AppServices.retained(for: user).calls))
     }
 
@@ -181,8 +180,6 @@ struct MainTabView: View {
                 case .discover:
                     DiscoverView(
                         model: discoverModel,
-                        notifications: notificationsModel,
-                        boost: boostModel,
                         coordinator: coordinator
                     )
 
@@ -269,12 +266,23 @@ struct MainTabView: View {
         }
         .fullScreenCover(isPresented: $coordinator.isPresenting) {
             if let flow = coordinator.flow {
-                CallFlowView(model: flow, coordinator: coordinator)
+                CallFlowView(model: flow, coordinator: coordinator, localPlayer: localPlayer)
             }
         }
         .onAppear {
             coordinator.openConversation = { openConversation($0) }
         }
+    }
+
+    /// Us, as the in-call experiences see us. The uid is what the media room
+    /// will call us too, so both devices compare the same string when they
+    /// decide whose answer is whose.
+    private var localPlayer: CallGameSeat {
+        CallGameSeat(
+            id: session.user?.id ?? "",
+            displayName: session.user?.profile.displayName ?? "You",
+            photoPath: session.user?.profile.primaryPhotoPath
+        )
     }
 
     /// Detail screens own the whole viewport — a floating bar over a chat

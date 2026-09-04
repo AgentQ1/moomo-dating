@@ -147,9 +147,26 @@ final class OnboardingUITests: XCTestCase {
 
     /// Captures the welcome screen for visual comparison. Attached to the test
     /// result and written to disk by tools/visual/capture.sh.
+    ///
+    /// Launched *without* `-use-mock-backend`, unlike every other test here.
+    /// The mock backend puts `MockModeBanner` above the routed screen, which
+    /// displaces the whole layout by the banner's height and makes the capture
+    /// disagree with the reference for a reason that has nothing to do with
+    /// the screen. Dropping the flag is safe precisely here: this test only
+    /// waits for the welcome screen to draw and photographs it. It never types
+    /// a number, never taps Verification, and so never reaches the network —
+    /// no SMS, no account, nothing left behind in the project.
     func testCaptureWelcomeScreenshot() {
-        let app = launch()
-        XCTAssertTrue(app.buttons["Verification"].firstMatch.waitForExistence(timeout: 5))
+        let app = XCUIApplication()
+        app.launchArguments += ["-ui-testing-reset"]
+        app.launch()
+        XCTAssertTrue(app.buttons["Verification"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertFalse(
+            app.staticTexts.containing(
+                NSPredicate(format: "label CONTAINS 'LOCAL MOCK MODE'")
+            ).element.exists,
+            "The capture must show the screen as a user sees it, with no debug chrome"
+        )
 
         let shot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
         shot.name = "welcome"
@@ -164,7 +181,7 @@ final class OnboardingUITests: XCTestCase {
         completeOnboarding(app)
 
         XCTAssertTrue(
-            app.staticTexts["Hey there 👋"].waitForExistence(timeout: 10),
+            app.staticTexts["CHAT MODES"].waitForExistence(timeout: 10),
             "Onboarding must finish into Discover"
         )
         // Let the hero's load settle so the skeleton isn't what gets captured.
@@ -183,12 +200,12 @@ final class OnboardingUITests: XCTestCase {
         completeOnboarding(app)
 
         XCTAssertTrue(
-            app.staticTexts["Hey there 👋"].waitForExistence(timeout: 10),
+            app.staticTexts["CHAT MODES"].waitForExistence(timeout: 10),
             "Onboarding must finish into Discover"
         )
 
         // Video Match, not the hero: the reference is a video call, with the
-        // self-view and the Camera control.
+        // floating self-view and the flip-camera control.
         app.buttons["Video Match. Instant video conversations"].firstMatch.tap()
         XCTAssertTrue(
             app.buttons["call.end"].waitForExistence(timeout: 12),
@@ -295,6 +312,11 @@ final class OnboardingUITests: XCTestCase {
         // Interested in
         XCTAssertTrue(app.staticTexts["Who would you like to meet?"].waitForExistence(timeout: 4))
         app.buttons["Everyone"].firstMatch.tap()
+        continueButton(app).tap()
+
+        // Dating intention — required, so the matching filter has a value.
+        XCTAssertTrue(app.staticTexts["What are you looking for?"].waitForExistence(timeout: 4))
+        app.buttons["intention.longTerm"].firstMatch.tap()
         continueButton(app).tap()
 
         // Location — a list of city cards.

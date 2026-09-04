@@ -346,10 +346,149 @@ describe('account deletion — deleteAccount callable only, never the client', (
   });
 });
 
-describe('users/{uid}/private — only the documented draft document', () => {
+describe('users/{uid}/private — only the two documented documents', () => {
   test('an arbitrary private document is rejected even for the owner', async () => {
     await assertFails(
       setDoc(doc(as(ALICE), 'users', ALICE, 'private', 'stash'), { x: 1 })
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// users/{uid}/private/location — the coarse position that ranks Discover,
+// matchmaking and the ring fan-out by distance.
+//
+// Two properties are being defended, and they are the whole privacy story of
+// the proximity feature:
+//
+//   1. NOBODY BUT THE OWNER CAN READ IT. Not another signed-in user, not
+//      someone who has called them, not an anonymous client. This is why the
+//      document lives here instead of on publicProfiles, where `get` is open
+//      to any signed-in user who knows a uid.
+//   2. IT CANNOT HOLD A PRECISE POSITION. The client is the thing trusted to
+//      coarsen, so the rules re-check the grid: a tampered build that uploads
+//      GPS-exact coordinates into its OWN private document is refused.
+// ---------------------------------------------------------------------------
+describe('users/{uid}/private/location — coarse, owner-only', () => {
+  /** A position snapped to the 0.01° (~1.11 km) grid, as the app sends it. */
+  const coarse = (lat, lng) => ({ lat, lng, updatedAt: serverTimestamp() });
+
+  async function seedLocation(uid, data) {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'users', uid, 'private', 'location'), {
+        lat: 41.88,
+        lng: -87.63,
+        updatedAt: Timestamp.now(),
+        ...data,
+      });
+    });
+  }
+
+  test('the owner can write and read back their own coarse location', async () => {
+    const ref = doc(as(ALICE), 'users', ALICE, 'private', 'location');
+    await assertSucceeds(setDoc(ref, coarse(41.88, -87.63)));
+    const snap = await assertSucceeds(getDoc(ref));
+    assert.equal(snap.data().lat, 41.88);
+    assert.equal(snap.data().lng, -87.63);
+  });
+
+  test('NO other signed-in user can read it — this is the trilateration guard', async () => {
+    await seedLocation(BOB);
+    await assertFails(getDoc(doc(as(ALICE), 'users', BOB, 'private', 'location')));
+  });
+
+  test('an anonymous client cannot read it', async () => {
+    await seedLocation(BOB);
+    await assertFails(getDoc(doc(anon(), 'users', BOB, 'private', 'location')));
+  });
+
+  test('nobody can write into another user location document', async () => {
+    await assertFails(
+      setDoc(doc(as(ALICE), 'users', BOB, 'private', 'location'), coarse(41.88, -87.63))
+    );
+  });
+
+  test('a precise latitude is refused — the grid is enforced server-side', async () => {
+    await assertFails(
+      setDoc(
+        doc(as(ALICE), 'users', ALICE, 'private', 'location'),
+        coarse(41.8781136, -87.6297982)
+      )
+    );
+  });
+
+  test('a longitude one tenth of a cell off-grid is refused', async () => {
+    // 0.001° ≈ 111 m — inside a cell, so it carries finer information than
+    // the grid promises, and must not be storable.
+    await assertFails(
+      setDoc(doc(as(ALICE), 'users', ALICE, 'private', 'location'), coarse(41.88, -87.631))
+    );
+  });
+
+  test('an out-of-range coordinate is refused', async () => {
+    await assertFails(
+      setDoc(doc(as(ALICE), 'users', ALICE, 'private', 'location'), coarse(91.0, 0))
+    );
+    await assertFails(
+      setDoc(doc(as(ALICE), 'users', ALICE, 'private', 'location'), coarse(0, 181.0))
+    );
+  });
+
+  test('a non-numeric coordinate is refused', async () => {
+    await assertFails(
+      setDoc(doc(as(ALICE), 'users', ALICE, 'private', 'location'), {
+        lat: '41.88',
+        lng: -87.63,
+        updatedAt: serverTimestamp(),
+      })
+    );
+  });
+
+  test('extra fields are refused — the document is exactly three keys', async () => {
+    await assertFails(
+      setDoc(doc(as(ALICE), 'users', ALICE, 'private', 'location'), {
+        ...coarse(41.88, -87.63),
+        accuracy: 5,
+      })
+    );
+    await assertFails(
+      setDoc(doc(as(ALICE), 'users', ALICE, 'private', 'location'), {
+        lat: 41.88,
+        updatedAt: serverTimestamp(),
+      })
+    );
+  });
+
+  test('a client-claimed timestamp is refused — staleness must be the server clock', async () => {
+    await assertFails(
+      setDoc(doc(as(ALICE), 'users', ALICE, 'private', 'location'), {
+        lat: 41.88,
+        lng: -87.63,
+        // A backdated or postdated stamp would let a stale position keep
+        // ranking past LOCATION_MAX_AGE_MS.
+        updatedAt: Timestamp.fromDate(new Date('2030-01-01')),
+      })
+    );
+  });
+
+  test('the owner can delete it — turning sharing off is always available', async () => {
+    await seedLocation(ALICE);
+    await assertSucceeds(
+      deleteDoc(doc(as(ALICE), 'users', ALICE, 'private', 'location'))
+    );
+  });
+
+  test('nobody can delete another user location', async () => {
+    await seedLocation(BOB);
+    await assertFails(deleteDoc(doc(as(ALICE), 'users', BOB, 'private', 'location')));
+  });
+
+  test('the grid boundary values 0 and the poles are writable', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(ALICE), 'users', ALICE, 'private', 'location'), coarse(0, 0))
+    );
+    await assertSucceeds(
+      setDoc(doc(as(ALICE), 'users', ALICE, 'private', 'location'), coarse(-90, 180))
     );
   });
 });
@@ -562,6 +701,7 @@ describe('publicProfiles/{uid} — readable by signed-in users, owner-written', 
     city: 'Austin',
     gender: 'woman',
     interestedIn: ['everyone'],
+    datingIntention: 'longTerm',
     photoPaths: [`users/${uid}/photos/p1.jpg`, `users/${uid}/photos/p2.jpg`],
     updatedAt: serverTimestamp(),
   });
@@ -626,6 +766,44 @@ describe('publicProfiles/{uid} — readable by signed-in users, owner-written', 
         ...fullProjection(ALICE),
         interestedIn: [],
       })
+    );
+  });
+
+  test('datingIntention outside the catalog is rejected', async () => {
+    // This field decides who the queue will pair someone with, so an
+    // unrecognised value is a matching bug, not a cosmetic one.
+    await assertFails(
+      setDoc(doc(as(ALICE), 'publicProfiles', ALICE), {
+        ...fullProjection(ALICE),
+        datingIntention: 'marriageWithinTheWeek',
+      })
+    );
+  });
+
+  test('every catalog datingIntention is accepted', async () => {
+    for (const intention of [
+      'lifePartner',
+      'longTerm',
+      'longTermOpenToShort',
+      'shortTermOpenToLong',
+      'shortTerm',
+      'figuringItOut',
+    ]) {
+      await assertSucceeds(
+        setDoc(doc(as(ALICE), 'publicProfiles', ALICE), {
+          ...fullProjection(ALICE),
+          datingIntention: intention,
+        })
+      );
+    }
+  });
+
+  test('a projection with no datingIntention is still accepted', async () => {
+    // Accounts from before intentions existed must keep saving.
+    const { datingIntention, ...withoutIntention } = fullProjection(ALICE);
+    void datingIntention;
+    await assertSucceeds(
+      setDoc(doc(as(ALICE), 'publicProfiles', ALICE), withoutIntention)
     );
   });
 

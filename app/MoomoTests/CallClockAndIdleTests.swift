@@ -19,7 +19,7 @@ final class CallClockAndIdleTests: XCTestCase {
     func testRemainingTimeIsRecomputedFromTheSessionStart() {
         let start = Date()
         let session = CallSession(
-            id: "s", candidate: kenji, mode: .voice,
+            id: "s", candidate: kenji, mode: .video,
             startedAt: start, maxDuration: 180
         )
 
@@ -42,7 +42,7 @@ final class CallClockAndIdleTests: XCTestCase {
         callDuration: TimeInterval = CallSession.speedCallDuration
     ) async -> CallFlowModel {
         let flow = CallFlowModel(
-            mode: .voice,
+            mode: .video,
             preferred: kenji,
             calls: MockCallService(
                 searchLatency: .milliseconds(1),

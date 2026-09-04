@@ -146,6 +146,39 @@ struct InterestedInStep: View {
     }
 }
 
+// MARK: - Dating intention
+
+struct DatingIntentionStep: View {
+    @ObservedObject var model: OnboardingModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            // The same six options Discover's bar and Edit Profile offer —
+            // `DatingIntentionOptions` is shared so the three places can't
+            // drift apart on wording or order.
+            DatingIntentionOptions(selection: intention)
+
+            Label(
+                "You can change this any time from your profile.",
+                systemImage: "arrow.triangle.2.circlepath"
+            )
+            .font(Typography.body)
+            .foregroundStyle(Palette.textSecondary)
+            .padding(.top, Space.xs)
+        }
+    }
+
+    /// Routes the shared picker's binding through `model.update`, which is what
+    /// persists the resume draft — assigning to the profile directly would let
+    /// a relaunch lose the answer.
+    private var intention: Binding<DatingIntention?> {
+        Binding(
+            get: { model.draft.profile.datingIntention },
+            set: { value in model.update { $0.datingIntention = value } }
+        )
+    }
+}
+
 // MARK: - Location
 
 struct LocationStep: View {

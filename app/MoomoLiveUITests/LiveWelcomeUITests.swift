@@ -56,7 +56,7 @@ final class LiveWelcomeUITests: XCTestCase {
         app.buttons["Verification"].waitForExistence(timeout: timeout)
             || app.textFields["First name"].waitForExistence(timeout: 2)
             || app.staticTexts["When's your birthday?"].waitForExistence(timeout: 2)
-            || app.staticTexts["Hey there 👋"].waitForExistence(timeout: 2)
+            || app.staticTexts["CHAT MODES"].waitForExistence(timeout: 2)
     }
 
     /// Welcome, on real Firebase, offers exactly one way in: the phone OTP

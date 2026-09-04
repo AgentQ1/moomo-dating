@@ -67,6 +67,60 @@ enum InterestedIn: String, Codable, Sendable, CaseIterable, Identifiable {
     }
 }
 
+/// What someone is on Baybe for.
+///
+/// This is a *filter*, not decoration: `MatchPreferences` refuses to pair two
+/// people whose intentions cannot overlap, and the server enforces the same
+/// table (see `backend/functions/src/compatibility.ts`). Someone looking for a
+/// life partner is never paired with someone looking for a short-term fling.
+enum DatingIntention: String, Codable, Sendable, CaseIterable, Identifiable {
+    case lifePartner
+    case longTerm
+    case longTermOpenToShort
+    case shortTermOpenToLong
+    case shortTerm
+    case figuringItOut
+
+    var id: String { rawValue }
+
+    /// Full wording, for the picker and the profile.
+    var label: String {
+        switch self {
+        case .lifePartner: "Life partner"
+        case .longTerm: "Long-term relationship"
+        case .longTermOpenToShort: "Long-term, open to short"
+        case .shortTermOpenToLong: "Short-term, open to long"
+        case .shortTerm: "Short-term fun"
+        case .figuringItOut: "Still figuring it out"
+        }
+    }
+
+    /// The short form the Discover bar can fit beside a city name.
+    var compactLabel: String {
+        switch self {
+        case .lifePartner: "Life partner"
+        case .longTerm: "Long-term"
+        case .longTermOpenToShort: "Mostly long-term"
+        case .shortTermOpenToLong: "Mostly short-term"
+        case .shortTerm: "Short-term"
+        case .figuringItOut: "Figuring it out"
+        }
+    }
+
+    /// One line of "what this actually means", so the choice is informed
+    /// rather than guessed at.
+    var detail: String {
+        switch self {
+        case .lifePartner: "Looking for the one."
+        case .longTerm: "Something serious, without naming the endpoint."
+        case .longTermOpenToShort: "Serious first, but not ruling anything out."
+        case .shortTermOpenToLong: "Casual first, but it could grow."
+        case .shortTerm: "Something light, right now."
+        case .figuringItOut: "Open to meeting people and seeing."
+        }
+    }
+}
+
 /// City-level location only.
 ///
 /// There is deliberately no latitude/longitude anywhere in this model. Precise
@@ -85,6 +139,13 @@ struct CityLocation: Codable, Equatable, Sendable {
     /// Reference profile shows "New York, USA".
     var shortDisplay: String {
         [city, countryName].compactMap { $0 }.joined(separator: ", ")
+    }
+
+    /// "Chicago, IL" — the Discover location bar's form. Prefers the region
+    /// code because that is what the reference shows; falls back to the
+    /// country for places we hold no region for ("London, United Kingdom").
+    var compactDisplay: String {
+        [city, region ?? countryName].compactMap { $0 }.joined(separator: ", ")
     }
 
     private var countryName: String? {
@@ -121,6 +182,9 @@ struct Profile: Codable, Equatable, Sendable {
     var dateOfBirth: Date?
     var gender: Gender?
     var interestedIn: Set<InterestedIn> = []
+    /// Nil on accounts from before intentions existed. Treated as "open to
+    /// anything" by the matching table, never as a reason to pair with nobody.
+    var datingIntention: DatingIntention?
     var location: CityLocation?
     var photos: [ProfilePhoto] = []
     var bio: String = ""

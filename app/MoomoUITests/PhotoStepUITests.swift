@@ -76,6 +76,12 @@ final class PhotoStepUITests: XCTestCase {
         app.buttons["Everyone"].tap()
         continueButton(app).tap()
 
+        // Dating intention — required before the flow will advance.
+        let intention = app.buttons["intention.longTerm"]
+        XCTAssertTrue(intention.waitForExistence(timeout: 4))
+        intention.tap()
+        continueButton(app).tap()
+
         // Location — a list of city cards, not a free-text field.
         let city = app.buttons["Chicago, United States"]
         XCTAssertTrue(city.waitForExistence(timeout: 4), "Location step should list cities")

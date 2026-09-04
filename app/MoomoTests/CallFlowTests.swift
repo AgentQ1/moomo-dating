@@ -55,7 +55,7 @@ final class CallFlowTests: XCTestCase {
     }
 
     private func makeFlow(
-        mode: CallMode = .voice,
+        mode: CallMode = .video,
         preferred: DiscoveryCandidate? = nil,
         incoming: CallInvite? = nil,
         callDuration: TimeInterval = CallSession.speedCallDuration,
@@ -84,7 +84,7 @@ final class CallFlowTests: XCTestCase {
 
     /// Runs a flow to the live call.
     private func startedFlow(
-        mode: CallMode = .voice,
+        mode: CallMode = .video,
         callDuration: TimeInterval = CallSession.speedCallDuration,
         media: MockCallMediaService = MockCallMediaService(),
         peerJoinTimeout: TimeInterval = 15
@@ -107,7 +107,7 @@ final class CallFlowTests: XCTestCase {
             return XCTFail("Expected an active call, got \(flow.stage)")
         }
         XCTAssertEqual(session.candidate.id, kenji.id, "Talk to Him must call the featured person")
-        XCTAssertEqual(session.mode, .voice)
+        XCTAssertEqual(session.mode, .video)
         XCTAssertEqual(flow.remainingSeconds, Int(CallSession.speedCallDuration))
     }
 
@@ -265,18 +265,63 @@ final class CallFlowTests: XCTestCase {
         XCTAssertEqual(summary.endReason, .timeExpired)
     }
 
+    /// Every call is a video call now, and every video call carries the
+    /// microphone: the camera starts on, the mic starts live, and both
+    /// toggle independently.
     func testMuteAndCameraToggles() async {
-        let voice = await startedFlow(mode: .voice)
-        XCTAssertFalse(voice.isCameraOn, "Voice calls have no camera")
-        XCTAssertFalse(voice.isMuted)
-        voice.toggleMute()
-        XCTAssertTrue(voice.isMuted)
-        voice.endCall()
+        let call = await startedFlow(mode: .video)
 
-        let video = await startedFlow(mode: .video)
-        XCTAssertTrue(video.isCameraOn, "Video calls start with the camera on")
-        video.toggleCamera()
-        XCTAssertFalse(video.isCameraOn)
+        XCTAssertTrue(call.isCameraOn, "Video calls start with the camera on")
+        XCTAssertFalse(call.isMuted, "…and with the microphone live")
+
+        call.toggleMute()
+        XCTAssertTrue(call.isMuted)
+        XCTAssertTrue(call.isCameraOn, "Muting must not touch the camera")
+
+        call.toggleMute()
+        XCTAssertFalse(call.isMuted, "Unmuting brings the microphone back")
+
+        call.toggleCamera()
+        XCTAssertFalse(call.isCameraOn)
+        XCTAssertFalse(call.isMuted, "Turning the camera off must not mute the call")
+
+        call.endCall()
+    }
+
+    /// Flipping the camera is a media-plane operation: it reaches the provider,
+    /// and it moves nothing else. The room is not rejoined, the microphone is
+    /// not touched, and no failure is claimed for an operation that worked.
+    func testFlipCameraReachesTheMediaProviderAndDisturbsNothingElse() async {
+        let media = MockCallMediaService()
+        let call = await startedFlow(mode: .video, media: media)
+
+        XCTAssertEqual(media.flipCount, 0)
+
+        call.flipCamera()
+        await settle(120)
+
+        XCTAssertEqual(media.flipCount, 1, "Flip must reach the media provider")
+        XCTAssertEqual(media.joinCount, 1, "Flipping must not rejoin the room")
+        XCTAssertEqual(media.leaveCount, 0, "Flipping must not leave the room")
+        XCTAssertFalse(call.isMuted, "Flipping must not touch the microphone")
+        XCTAssertTrue(call.isCameraOn, "Flipping must not turn the camera off")
+        XCTAssertNil(call.actionFailure, "A flip that worked must not report a failure")
+
+        call.endCall()
+    }
+
+    /// A flip the provider refuses says so, in the same place mute and camera
+    /// failures are said, rather than failing silently.
+    func testFailedFlipCameraSurfacesAMessage() async {
+        let media = MockCallMediaService(controlsFail: true)
+        let call = await startedFlow(mode: .video, media: media)
+
+        call.flipCamera()
+        await settle(120)
+
+        XCTAssertEqual(call.actionFailure, "Couldn't switch cameras. Please try again.")
+
+        call.endCall()
     }
 
     // MARK: - Permissions & media
@@ -447,7 +492,7 @@ final class CallFlowTests: XCTestCase {
         XCTAssertEqual(history[0].outcome, .blocked)
 
         // And matchmaking can never hand them back.
-        let next = try await calls.findCandidate(mode: .voice, preferring: kenji)
+        let next = try await calls.findCandidate(mode: .video, preferring: kenji)
         XCTAssertNotEqual(next.id, kenji.id, "A blocked person must not be re-matched")
     }
 

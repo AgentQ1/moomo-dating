@@ -55,6 +55,9 @@ enum FirestorePath {
     static let publicProfiles = "publicProfiles"
     static let privateCollection = "private"
     static let onboardingDocument = "onboarding"
+    /// The coarse position that ranks Discover by distance. Private by
+    /// path: rules allow only its owner to read it (CoarseLocationReporter).
+    static let locationDocument = "location"
     static let callHistory = "callHistory"
     static let notifications = "notifications"
     static let matchmakingQueue = "matchmakingQueue"

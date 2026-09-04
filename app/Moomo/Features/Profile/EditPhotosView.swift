@@ -27,6 +27,19 @@ final class EditPhotosModel: ObservableObject {
 
     static let maxPhotos = 6
 
+    /// A profile cannot enter the app without a photo
+    /// (`ProfileRequirements.missingFields`), so the editor must never be able
+    /// to persist an empty list. Saving one flips `hasValidProfileState` to
+    /// false and `SessionStore` re-derives `.onboarding`, dumping the user on
+    /// the name step mid-edit — which is exactly what "changing" a
+    /// single-photo profile used to do.
+    static let minimumPhotos = 1
+
+    /// False when the only photo left is the one keeping this profile valid.
+    /// The view hides the remove control rather than letting the tap fail
+    /// silently; replacing a sole photo means adding the new one first.
+    var canRemovePhotos: Bool { photos.count > Self.minimumPhotos }
+
     init(
         uid: String,
         photos: [ProfilePhoto],
@@ -70,6 +83,10 @@ final class EditPhotosModel: ObservableObject {
 
     func removePhoto(id: String) {
         guard let photo = photos.first(where: { $0.id == id }) else { return }
+        // Belt and braces with the view's hidden control: any other caller
+        // (tests, a future bulk edit) must not be able to invalidate the
+        // profile either.
+        guard canRemovePhotos else { return }
         photos.removeAll { $0.id == id }
         renumber()
         let save = scheduleSave()
@@ -141,9 +158,15 @@ struct EditPhotosView: View {
                     grid
                 }
 
-                Text("Your first photo is your main one.")
-                    .font(Typography.body)
-                    .foregroundStyle(Palette.textSecondary)
+                // Without this the missing ✕ on a sole photo reads as a bug.
+                Text(
+                    model.canRemovePhotos
+                        ? "Your first photo is your main one."
+                        : "Your first photo is your main one. To swap it, add another photo first — your profile needs at least one."
+                )
+                .font(Typography.body)
+                .foregroundStyle(Palette.textSecondary)
+                .accessibilityIdentifier("editPhotos.hint")
 
                 if let loadFailureMessage {
                     Label(loadFailureMessage, systemImage: "exclamationmark.circle.fill")
@@ -239,15 +262,20 @@ struct EditPhotosView: View {
                 }
             }
             .overlay(alignment: .topTrailing) {
-                Button {
-                    model.removePhoto(id: photo.id)
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 22))
-                        .foregroundStyle(.white, Palette.ink.opacity(0.5))
-                        .padding(6)
+                // Offered only when removal can actually succeed. On a
+                // single-photo profile the remove would empty the list, and a
+                // photo-less profile is routed straight back to onboarding.
+                if model.canRemovePhotos {
+                    Button {
+                        model.removePhoto(id: photo.id)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.white, Palette.ink.opacity(0.5))
+                            .padding(6)
+                    }
+                    .accessibilityLabel("Remove photo")
                 }
-                .accessibilityLabel("Remove photo")
             }
     }
 

@@ -53,6 +53,14 @@ struct FirestoreDiscoveryService: DiscoveryService {
             ], merge: true)
         }
 
+        // Same best-effort footing as the heartbeat, and heavily throttled
+        // (CoarseLocation.minimumRefreshInterval). Returns immediately unless
+        // location permission was ALREADY granted — it never prompts, so a
+        // user who declined simply gets a recency-ranked feed. Awaited rather
+        // than detached so the position is in place before the feed that
+        // ranks by it is composed; the reporter's own timeout bounds the wait.
+        await CoarseLocationReporter.refreshIfAuthorized(uid: uid)
+
         let payload: [String: Any]
         do {
             payload = try await FunctionsClient.call(.getDiscoveryFeed)

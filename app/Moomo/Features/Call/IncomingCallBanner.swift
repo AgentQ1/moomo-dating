@@ -9,12 +9,15 @@ struct IncomingCallBanner: View {
     var onAccept: () -> Void
     var onDecline: () -> Void
 
+    /// Every ringable call is a video call — `IncomingCallModel` declines the
+    /// retired voice-only mode before a banner can exist for it. The fallback
+    /// stays generic rather than naming a product that is gone.
     private var modeIcon: String {
-        invite.mode == .video ? "video.fill" : "mic.fill"
+        invite.mode == .video ? "video.fill" : "phone.fill"
     }
 
     private var subtitle: String {
-        invite.mode == .video ? "Incoming Video Call" : "Incoming Voice Call"
+        invite.mode == .video ? "Incoming Video Call" : "Incoming Call"
     }
 
     var body: some View {
@@ -47,7 +50,7 @@ struct IncomingCallBanner: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(
-                "Accept \(invite.mode == .video ? "video" : "voice") call from \(invite.caller.displayName)"
+                "Accept \(invite.mode == .video ? "video " : "")call from \(invite.caller.displayName)"
             )
             .accessibilityIdentifier("call.incoming.accept")
         }
@@ -135,7 +138,7 @@ struct IncomingCallBanner: View {
                     id: "u-2", displayName: "Anaya", age: 24, city: "Chicago",
                     photoPath: nil, isOnline: true, wantsToTalk: false, pronoun: .she
                 ),
-                mode: .voice,
+                mode: .video,
                 expiresAt: Date().addingTimeInterval(10)
             ),
             onAccept: {},

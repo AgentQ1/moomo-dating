@@ -51,6 +51,76 @@ final class OnboardingTests: XCTestCase {
         XCTAssertTrue(steps.contains(.safety))
     }
 
+    // MARK: - Dating intention
+
+    /// The flow, not `allCases`, decides what the user walks through.
+    func testDatingIntentionIsInTheFlowBesideTheOtherMatchingFilter() {
+        let flow = OnboardingStep.flow
+        XCTAssertEqual(Set(flow).count, flow.count, "A step must not appear twice")
+        XCTAssertEqual(
+            Set(flow), Set(OnboardingStep.allCases),
+            "Every declared step must be reachable — a case missing from `flow` is dead UI"
+        )
+
+        guard let interestedIn = flow.firstIndex(of: .interestedIn),
+              let intention = flow.firstIndex(of: .datingIntention)
+        else { return XCTFail("Both matching filters must be in the flow") }
+        XCTAssertEqual(intention, interestedIn + 1, "The two matching filters are asked together")
+    }
+
+    /// Raw values are persisted in the resume draft. Renumbering them would
+    /// resume an in-flight user on a different step than they left.
+    func testStepRawValuesAreStableForPersistedDrafts() {
+        XCTAssertEqual(OnboardingStep.name.rawValue, 0)
+        XCTAssertEqual(OnboardingStep.interestedIn.rawValue, 3)
+        XCTAssertEqual(OnboardingStep.location.rawValue, 4)
+        XCTAssertEqual(OnboardingStep.review.rawValue, 11)
+        XCTAssertEqual(
+            OnboardingStep.datingIntention.rawValue, 12,
+            "New steps append; they never renumber the existing ones"
+        )
+    }
+
+    func testCannotAdvancePastDatingIntentionWithoutChoosing() {
+        let model = makeModel()
+        model.jumpToStepForTesting(.datingIntention)
+
+        XCTAssertFalse(model.advance())
+        XCTAssertNotNil(model.validationMessage)
+        XCTAssertEqual(model.draft.currentStep, .datingIntention)
+
+        model.update { $0.datingIntention = .longTerm }
+        XCTAssertTrue(model.advance())
+        XCTAssertEqual(model.draft.currentStep, .location)
+    }
+
+    /// The onboarding requirement must not leak into the app-entry gate: every
+    /// account that predates intentions has nil, and gating on it there would
+    /// bounce the entire existing userbase back into onboarding.
+    func testExistingProfilesWithoutAnIntentionStayValid() {
+        var profile = Profile()
+        profile.displayName = "Sam"
+        profile.dateOfBirth = Calendar.current.date(byAdding: .year, value: -30, to: Date())
+        profile.gender = .woman
+        profile.interestedIn = [.everyone]
+        profile.location = CityCatalog.cities[0]
+        profile.photos = [ProfilePhoto(id: "p1", remotePath: "users/u/photos/p1.jpg", order: 0)]
+        profile.datingIntention = nil
+
+        XCTAssertTrue(
+            ProfileRequirements.missingFields(in: profile).isEmpty,
+            "A nil dating intention must never block an existing account from the app"
+        )
+    }
+
+    /// What onboarding collects is what gets written — the completion path
+    /// hands the whole draft profile to SessionStore.
+    func testFinishedDraftCarriesTheChosenIntention() {
+        let model = makeModel()
+        model.update { $0.datingIntention = .shortTermOpenToLong }
+        XCTAssertEqual(model.draft.profile.datingIntention, .shortTermOpenToLong)
+    }
+
     // MARK: - Validation
 
     func testCannotAdvancePastEmptyName() {

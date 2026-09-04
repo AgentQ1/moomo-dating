@@ -46,7 +46,12 @@ const EXPECTED_MAX_INSTANCES = {
   leaveMatchmakingQueue: 20,
   acceptCallInvite: 20,
   declineCallInvite: 20,
-  getDiscoveryFeed: 20,
+  // 10, not 20: sum(maxInstances) across the 17 deployed services sits at
+  // ~236 of us-central1's ~250 total-CPU quota, and a service update needs its
+  // own ceiling again as transient headroom — at 20 the getDiscoveryFeed
+  // deploy is refused outright. Matches the ceiling and the reasoning at
+  // src/discovery.ts. Restore to 20 with the source once the quota is raised.
+  getDiscoveryFeed: 10,
   submitCallDecision: 20,
   endCallSession: 20,
   getCallMediaToken: 20,

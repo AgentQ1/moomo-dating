@@ -1,16 +1,25 @@
 import SwiftUI
 
-/// Primary action button. The coral pill from the Discover reference
-/// ("Talk to Him"), reused as the app's main CTA.
+/// Primary action button. The coral pill from the auth reference, reused as
+/// the app's main CTA.
 struct PrimaryButton: View {
     var title: String
     var icon: String?
     var isEnabled: Bool = true
     var isLoading: Bool = false
+    /// Pill colour. Coral everywhere except the Discover hero, whose reference
+    /// uses the deeper magenta.
+    var fill: Color = Palette.coral
     var action: () -> Void
 
     @State private var isPressed = false
     private var isInteractive: Bool { isEnabled && !isLoading }
+
+    /// The tinted CTA lift, keyed to whatever the pill is filled with — a
+    /// coral-tinted shadow under a magenta pill reads as a printing error.
+    private var lift: ShadowStyle {
+        ShadowStyle(color: fill.opacity(0.32), radius: 18, x: 0, y: 8)
+    }
 
     var body: some View {
         Button(action: action) {
@@ -31,8 +40,8 @@ struct PrimaryButton: View {
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
             .frame(height: Size.primaryCTAHeight)
-            .background(Capsule().fill(Palette.coral))
-            .shadow(isEnabled ? Shadows.coralCTA : Shadows.card)
+            .background(Capsule().fill(fill))
+            .shadow(isEnabled ? lift : Shadows.card)
             .scaleEffect(isPressed ? Motion.pressedScale : 1)
             .opacity(isEnabled ? 1 : 0.4)
             .saturation(isEnabled ? 1 : 0)

@@ -274,3 +274,178 @@ describe('getDiscoveryFeed — the only way to browse profiles', () => {
     });
   });
 });
+
+/**
+ * Proximity ranking, end to end through the callable.
+ *
+ * The claim being defended is the one the Discover hero makes out loud:
+ * closer compatible people rank higher. The tests that matter most, though,
+ * are the FALLBACK ones — a user who denied location permission, and a
+ * candidate who never shared one, must still see and be seen. Excluding the
+ * location-less is exactly how this feature would recreate the "demo accounts
+ * can never pair" failure that got build 3 rejected.
+ */
+describe('getDiscoveryFeed — proximity ranking', () => {
+  beforeEach(clearFirestore);
+
+  /** Positions on the 0.01° grid the client and the rules both enforce. */
+  const CHICAGO = { lat: 41.88, lng: -87.63 };
+  const EVANSTON = { lat: 42.05, lng: -87.68 }; // ~19 km
+  const MILWAUKEE = { lat: 43.04, lng: -87.91 }; // ~132 km
+  const NEW_YORK = { lat: 40.71, lng: -74.01 }; // ~1145 km
+
+  /** The private coarse location document — never publicProfiles. */
+  async function seedLocation(uid, { lat, lng }, updatedAt = Timestamp.now()) {
+    await db.doc(`users/${uid}/private/location`).set({ lat, lng, updatedAt });
+  }
+
+  test('THE CLAIM: with all else equal, closer compatible users rank higher', async () => {
+    // Identical profiles, identical activity — distance is the only variable.
+    await seedProfile(VIEWER);
+    await seedLocation(VIEWER, CHICAGO);
+    for (const [uid, place] of [
+      ['far-ny', NEW_YORK],
+      ['near-evanston', EVANSTON],
+      ['mid-milwaukee', MILWAUKEE],
+    ]) {
+      await seedProfile(uid, { lastActiveAt: secondsAgo(30) });
+      await seedLocation(uid, place);
+    }
+
+    const result = await feed(asUser(VIEWER));
+
+    assert.deepEqual(uids(result), ['near-evanston', 'mid-milwaukee', 'far-ny']);
+  });
+
+  test('the closest waiting user gets the hero card', async () => {
+    await seedProfile(VIEWER);
+    await seedLocation(VIEWER, CHICAGO);
+    await seedProfile('waiting-far', { wantsToTalk: true, lastActiveAt: secondsAgo(20) });
+    await seedLocation('waiting-far', NEW_YORK);
+    await seedProfile('waiting-near', { wantsToTalk: true, lastActiveAt: secondsAgo(20) });
+    await seedLocation('waiting-near', EVANSTON);
+
+    const result = await feed(asUser(VIEWER));
+
+    // The client features the first `wantsToTalk` candidate in the list.
+    assert.equal(result.candidates.find((c) => c.wantsToTalk).uid, 'waiting-near');
+  });
+
+  test('DENIED PERMISSION: a viewer with no location still gets a full feed', async () => {
+    // No users/{VIEWER}/private/location document at all — the exact state of
+    // an account that refused the OS prompt.
+    await seedProfile(VIEWER);
+    await seedProfile('located-far', { lastActiveAt: secondsAgo(10) });
+    await seedLocation('located-far', NEW_YORK);
+    await seedProfile('located-near', { lastActiveAt: secondsAgo(90) });
+    await seedLocation('located-near', EVANSTON);
+    await seedProfile('unlocated', { lastActiveAt: secondsAgo(200) });
+
+    const result = await feed(asUser(VIEWER));
+
+    // Everyone is present, and the order is pure recency — identical to the
+    // behaviour that shipped before proximity existed.
+    assert.deepEqual(uids(result), ['located-far', 'located-near', 'unlocated']);
+  });
+
+  test('MISSING CANDIDATE LOCATION: never excluded, and ranked between near and far', async () => {
+    await seedProfile(VIEWER);
+    await seedLocation(VIEWER, CHICAGO);
+    await seedProfile('near', { lastActiveAt: secondsAgo(30) });
+    await seedLocation('near', EVANSTON);
+    await seedProfile('no-location', { lastActiveAt: secondsAgo(30) });
+    await seedProfile('far', { lastActiveAt: secondsAgo(30) });
+    await seedLocation('far', NEW_YORK);
+
+    const result = await feed(asUser(VIEWER));
+
+    assert.deepEqual(uids(result), ['near', 'no-location', 'far']);
+  });
+
+  test('a stale position ranks neutral rather than by where they used to be', async () => {
+    await seedProfile(VIEWER);
+    await seedLocation(VIEWER, CHICAGO);
+    await seedProfile('stale-neighbour', { lastActiveAt: secondsAgo(30) });
+    // Next door, but recorded 60 days ago — past LOCATION_MAX_AGE_MS.
+    await seedLocation(
+      'stale-neighbour',
+      CHICAGO,
+      Timestamp.fromMillis(Date.now() - 60 * 24 * 60 * 60 * 1000)
+    );
+    await seedProfile('fresh-suburb', { lastActiveAt: secondsAgo(30) });
+    await seedLocation('fresh-suburb', EVANSTON);
+
+    const result = await feed(asUser(VIEWER));
+
+    // The fresh nearby position wins; the stale one is still in the feed.
+    assert.deepEqual(uids(result), ['fresh-suburb', 'stale-neighbour']);
+  });
+
+  test('proximity NEVER overrides compatibility — a next-door incompatible is still excluded', async () => {
+    await seedProfile(VIEWER, { gender: 'woman', interestedIn: ['men'] });
+    await seedLocation(VIEWER, CHICAGO);
+    // Same cell as the viewer, and wrong gender for their preference.
+    await seedProfile('next-door-incompatible', { gender: 'woman', interestedIn: ['women'] });
+    await seedLocation('next-door-incompatible', CHICAGO);
+    await seedProfile('distant-compatible', { gender: 'man', interestedIn: ['women'] });
+    await seedLocation('distant-compatible', NEW_YORK);
+
+    const result = await feed(asUser(VIEWER));
+
+    assert.deepEqual(uids(result), ['distant-compatible']);
+  });
+
+  test('proximity NEVER overrides a block or a pass — even in the same cell', async () => {
+    await seedProfile(VIEWER);
+    await seedLocation(VIEWER, CHICAGO);
+    for (const uid of ['blocked-neighbour', 'passed-neighbour', 'ordinary-far']) {
+      await seedProfile(uid);
+    }
+    await seedLocation('blocked-neighbour', CHICAGO);
+    await seedLocation('passed-neighbour', CHICAGO);
+    await seedLocation('ordinary-far', NEW_YORK);
+    await db.doc(`blocks/${VIEWER}/blocked/blocked-neighbour`).set({ createdAt: Timestamp.now() });
+    await db.doc(`passes/passed-neighbour/passed/${VIEWER}`).set({ createdAt: Timestamp.now() });
+
+    const result = await feed(asUser(VIEWER));
+
+    assert.deepEqual(uids(result), ['ordinary-far']);
+  });
+
+  test('a malformed location document degrades to neutral, never to an error', async () => {
+    await seedProfile(VIEWER);
+    await seedLocation(VIEWER, CHICAGO);
+    await seedProfile('junk-location', { lastActiveAt: secondsAgo(30) });
+    // Rules would refuse this from a client; the Admin SDK bypasses rules, so
+    // the reader must survive it regardless of how it got there.
+    await db.doc('users/junk-location/private/location').set({
+      lat: 'north',
+      lng: null,
+      updatedAt: Timestamp.now(),
+    });
+
+    const result = await feed(asUser(VIEWER));
+
+    assert.deepEqual(uids(result), ['junk-location']);
+  });
+
+  test('coordinates NEVER appear in the payload the client receives', async () => {
+    // The DTO is the last line of defence: a distance or a coordinate leaking
+    // into the feed response would undo the private-document design.
+    await seedProfile(VIEWER);
+    await seedLocation(VIEWER, CHICAGO);
+    await seedProfile('someone');
+    await seedLocation('someone', EVANSTON);
+
+    const result = await feed(asUser(VIEWER));
+
+    const serialized = JSON.stringify(result);
+    for (const leaked of ['lat', 'lng', 'distance', '42.05', '-87.68', '41.88']) {
+      assert.ok(!serialized.includes(leaked), `feed payload leaked ${leaked}: ${serialized}`);
+    }
+    assert.deepEqual(Object.keys(result.candidates[0]).sort(), [
+      'age', 'city', 'displayName', 'gender', 'isOnline', 'isVerified',
+      'occupation', 'photoPath', 'uid', 'wantsToTalk',
+    ]);
+  });
+});

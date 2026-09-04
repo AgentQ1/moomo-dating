@@ -56,7 +56,7 @@ final class ScreenshotCaptureUITests: XCTestCase {
         sleep(6)
         snap(app, "02-discover")
 
-        captureBoost(app)
+        captureLocationPicker(app)
         captureSearch(app)
 
         visit(app, tab: "Calls", name: "05-calls", settle: 4)
@@ -67,28 +67,30 @@ final class ScreenshotCaptureUITests: XCTestCase {
         captureSafety(app)
     }
 
-    /// The free daily boost, opened from the Discover header.
-    private func captureBoost(_ app: XCUIApplication) {
-        let boost = app.buttons["discover.boost"]
-        guard boost.waitForExistence(timeout: 10) else {
-            XCTFail("Boost button not found on Discover")
+    /// The city picker, opened from the Discover location bar. This replaced
+    /// the Boost shot: Boost no longer has an entry point on Discover.
+    private func captureLocationPicker(_ app: XCUIApplication) {
+        let bar = app.buttons["discover.locationBar"]
+        guard bar.waitForExistence(timeout: 10) else {
+            XCTFail("Location bar not found on Discover")
             return
         }
-        boost.tap()
-        XCTAssertTrue(app.buttons["boost.activate"].waitForExistence(timeout: 15)
-                      || app.staticTexts["boost.activeUntil"].waitForExistence(timeout: 1),
-                      "Boost sheet never presented")
+        bar.tap()
+        XCTAssertTrue(
+            app.navigationBars["Your city"].waitForExistence(timeout: 15),
+            "Location picker never presented"
+        )
+        // The map tiles and the reverse geocode both need a moment.
+        sleep(5)
+        snap(app, "03-location")
+        app.buttons["location.cancel"].tap()
         sleep(2)
-        snap(app, "03-boost")
-        dismissSheet(app)
     }
 
     /// Matchmaking in progress. This really does join the production queue, so
     /// the search is cancelled again as soon as the shot is taken.
     private func captureSearch(_ app: XCUIApplication) {
-        // The hero CTA is titled "Talk to Her"/"Talk to Him" after the pronoun
-        // of whoever is featured, so match on the stable prefix instead.
-        let cta = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Talk to'")).firstMatch
+        let cta = app.buttons["discover.nearby"]
         guard cta.waitForExistence(timeout: 15) else {
             XCTFail("Discover hero CTA not found — no one is waiting")
             return
@@ -134,16 +136,6 @@ final class ScreenshotCaptureUITests: XCTestCase {
         sleep(3)
         snap(app, "10-safety")
         app.navigationBars.buttons.firstMatch.tap()
-        sleep(2)
-    }
-
-    private func dismissSheet(_ app: XCUIApplication) {
-        let close = app.buttons["Close"]
-        if close.waitForExistence(timeout: 5) {
-            close.tap()
-        } else {
-            app.swipeDown(velocity: .fast)
-        }
         sleep(2)
     }
 
@@ -224,7 +216,7 @@ final class ScreenshotCaptureUITests: XCTestCase {
     /// so it is the signal that the call actually connected.
     private func searchUntilPaired(_ app: XCUIApplication, attempts: Int = 6) -> Bool {
         for _ in 1...attempts {
-            let cta = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Talk to'")).firstMatch
+            let cta = app.buttons["discover.nearby"]
             guard waitUntilHittable(cta, timeout: 30) else { return false }
             cta.tap()
 

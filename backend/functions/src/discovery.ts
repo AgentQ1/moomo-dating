@@ -32,12 +32,22 @@
  * increasing indexed timestamp was the audit's #1 write hotspot (P1-1), so
  * its single-field indexes are disabled in firestore.indexes.json and the
  * feed orders by the coarse bucket instead, breaking ties in memory.
+ *
+ * The in-memory ordering blends recency with PROXIMITY (proximity.ts): closer
+ * compatible people rank higher, which is what makes the Discover hero's
+ * "Nearby" a description rather than a decoration. Proximity is a boost on a
+ * list the filters above have already decided — it can reorder candidates and
+ * nothing else. It cannot admit someone compatibility, a block or a pass has
+ * excluded, and a candidate with no shared location scores neutral and stays
+ * in the feed. The QUERY shape is untouched: distance is computed over the
+ * same bounded pools, so there is no geo query and no new index.
  */
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { Timestamp } from "firebase-admin/firestore";
 import { callable } from "./options";
 import { db, requireAuth } from "./shared";
 import { PublicProfile, isMutuallyCompatible } from "./compatibility";
+import { candidateScore, loadCoarseLocations } from "./proximity";
 import { enforceRateLimit } from "./ratelimit";
 import { requireEnabled } from "./runtime";
 import { logEvent } from "./observability";
@@ -152,7 +162,12 @@ export async function filterExcluded<T extends { id: string }>(
   return { allowed, blockedRemoved, passedRemoved };
 }
 
-export const getDiscoveryFeed = onCall(callable(20), async (request) => {
+// 10, not the usual 20: us-central1's total-CPU-per-region quota is saturated
+// at sum(maxInstances) = 236/~250 across the 17 services, and updating this
+// service needs its own ceiling again as transient headroom — at 20 the deploy
+// fails outright. 10 × concurrency 80 is still 800 in-flight feed requests.
+// Restore to 20 once the Cloud Run CPU quota is raised.
+export const getDiscoveryFeed = onCall(callable(10), async (request) => {
   const startedAtMillis = Date.now();
   const uid = requireAuth(request);
   await requireEnabled("getDiscoveryFeed", "discoveryEnabled");
@@ -229,25 +244,50 @@ export const getDiscoveryFeed = onCall(callable(20), async (request) => {
     compatible
   );
 
+  // Private coarse positions for the viewer and everyone who survived the
+  // filters — ONE batched read, and only after the exclusions have run, so a
+  // blocked or incompatible person's location is never even fetched. Failure
+  // is absorbed inside loadCoarseLocations: every candidate then scores
+  // neutral and the order falls back to pure recency.
+  const located = await loadCoarseLocations([uid, ...allowed.map((s) => s.id)], now);
+  const viewerLocation = located.get(uid) ?? null;
+  let locatedCandidates = 0;
+
   const ranked = allowed
-    .map((snapshot) => ({
-      uid: snapshot.id,
-      candidate: candidateFrom(snapshot, now),
-      lastActiveMillis:
+    .map((snapshot) => {
+      const candidateLocation = located.get(snapshot.id) ?? null;
+      if (candidateLocation) locatedCandidates += 1;
+      const lastActiveMillis =
         snapshot.get("lastActiveAt") instanceof Timestamp
           ? (snapshot.get("lastActiveAt") as Timestamp).toMillis()
-          : 0,
-    }))
+          : 0;
+      return {
+        uid: snapshot.id,
+        candidate: candidateFrom(snapshot, now),
+        lastActiveMillis,
+        // Exact recency is fine as an in-memory ranking input — it is only
+        // the INDEX on lastActiveAt that hotspots, and that index is gone.
+        score: candidateScore(
+          now.toMillis() - lastActiveMillis,
+          viewerLocation,
+          candidateLocation
+        ),
+      };
+    })
     .filter((entry) => entry.candidate !== null)
-    // Exact recency is fine as an in-memory tiebreak — it is only the
-    // INDEX on lastActiveAt that hotspots, and that index is gone.
-    .sort((a, b) => b.lastActiveMillis - a.lastActiveMillis);
+    // Closer AND more recently active sorts first. With no viewer location
+    // every proximity term is the same constant, so this is identical to the
+    // recency-only order that shipped before proximity existed — which is
+    // exactly what a user who denied location permission must still get.
+    .sort((a, b) => b.score - a.score);
 
   // Genuinely-waiting people are reserved seats — the hero card is the
-  // product, and pure recency would squeeze them out the moment one
-  // activity bucket holds more people than the feed. The final list stays
-  // recency-ordered; the client finds its hero by `wantsToTalk` wherever
-  // it sits.
+  // product, and ranking alone would squeeze them out the moment one
+  // activity bucket holds more people than the feed. The seats go to the
+  // best-ranked waiters, so the hero card is the closest, most recently
+  // active person actually waiting for a call. The final list stays in
+  // ranked order; the client finds its hero by `wantsToTalk` wherever it
+  // sits.
   const waiting = ranked
     .filter((entry) => entry.candidate?.wantsToTalk)
     .slice(0, WAITING_POOL);
@@ -257,7 +297,7 @@ export const getDiscoveryFeed = onCall(callable(20), async (request) => {
     ...waiting,
     ...rest.slice(0, Math.max(0, FEED_LIMIT - waiting.length)),
   ]
-    .sort((a, b) => b.lastActiveMillis - a.lastActiveMillis)
+    .sort((a, b) => b.score - a.score)
     .map((entry) => entry.candidate as FeedCandidate);
 
   logEvent("discovery_feed_served", {
@@ -266,6 +306,12 @@ export const getDiscoveryFeed = onCall(callable(20), async (request) => {
     pooled: pooled.length,
     blockedFiltered: blockedRemoved,
     passedFiltered: passedRemoved,
+    // Proximity coverage. `viewerLocated: false` means this user's feed was
+    // ranked by recency alone (permission denied, or never granted) — the
+    // supported fallback, not an error. A `locatedCandidates` that stays near
+    // zero across many users means the client write path is broken.
+    viewerLocated: viewerLocation !== null,
+    locatedCandidates,
     // Sustained `true` in production means the activityBucket backfill has
     // not run — alert on it (see OBSERVABILITY_AND_INCIDENT_PLAN.md).
     fallbackUsed,

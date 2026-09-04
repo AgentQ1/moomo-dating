@@ -20,6 +20,7 @@ import {
   END_REASONS,
   EndReason,
   SPEED_CALL_SECONDS,
+  readStoredCallMode,
 } from "./shared";
 
 export const endCallSession = onCall(callable(20), async (request) => {
@@ -69,7 +70,7 @@ export const endCallSession = onCall(callable(20), async (request) => {
     });
 
     const participants = session.get("participants") ?? {};
-    const mode = session.get("mode") ?? "voice";
+    const mode = readStoredCallMode(session.get("mode"));
 
     // The ender's record carries the truth of why.
     tx.set(historyRef(uid, sessionId), {

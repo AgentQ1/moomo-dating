@@ -64,10 +64,10 @@ describe('per-user rate limits — expensive callables are not free levers', () 
   test('joinMatchmakingQueue refuses once the window is full', async () => {
     const { limit } = RATE_LIMITS.joinMatchmakingQueue;
     for (let i = 0; i < limit; i += 1) {
-      await joinQueue(asUser(ALICE, { mode: 'voice' }));
+      await joinQueue(asUser(ALICE, { mode: 'video' }));
     }
     await assert.rejects(
-      joinQueue(asUser(ALICE, { mode: 'voice' })),
+      joinQueue(asUser(ALICE, { mode: 'video' })),
       rejectsWithCode('resource-exhausted')
     );
   });
@@ -75,9 +75,9 @@ describe('per-user rate limits — expensive callables are not free levers', () 
   test('the limit is per user — one user\'s storm never blocks another', async () => {
     const { limit } = RATE_LIMITS.joinMatchmakingQueue;
     for (let i = 0; i < limit; i += 1) {
-      await joinQueue(asUser(ALICE, { mode: 'voice' }));
+      await joinQueue(asUser(ALICE, { mode: 'video' }));
     }
-    const other = await joinQueue(asUser('bob-guards-uid', { mode: 'voice' }));
+    const other = await joinQueue(asUser('bob-guards-uid', { mode: 'video' }));
     assert.ok(['matched', 'waiting'].includes(other.status));
   });
 
@@ -90,7 +90,7 @@ describe('per-user rate limits — expensive callables are not free levers', () 
       count: limit,
     });
 
-    const result = await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const result = await joinQueue(asUser(ALICE, { mode: 'video' }));
     assert.equal(result.status, 'waiting', 'a stale window must not still block');
   });
 
@@ -107,7 +107,7 @@ describe('per-user rate limits — expensive callables are not free levers', () 
   });
 
   test('rate-limit counters are attributable operator records', async () => {
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
     const counter = await db.doc(`rateLimits/${ALICE}_joinMatchmakingQueue`).get();
     assert.ok(counter.exists);
     assert.equal(counter.get('uid'), ALICE);
@@ -121,25 +121,25 @@ describe('kill switch — config/runtime flips features off without a deploy', (
   beforeEach(clearFirestore);
 
   test('a missing config document means everything is enabled', async () => {
-    const result = await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const result = await joinQueue(asUser(ALICE, { mode: 'video' }));
     assert.equal(result.status, 'waiting');
   });
 
   test('matchmakingEnabled=false refuses joins with a retryable error', async () => {
     await db.doc('config/runtime').set({ matchmakingEnabled: false });
     await assert.rejects(
-      joinQueue(asUser(ALICE, { mode: 'voice' })),
+      joinQueue(asUser(ALICE, { mode: 'video' })),
       rejectsWithCode('unavailable')
     );
   });
 
   test('maintenanceMode blocks gated callables but NEVER leaving the queue', async () => {
     // Waiting first, then the brake drops.
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
     await db.doc('config/runtime').set({ maintenanceMode: true });
 
     await assert.rejects(
-      joinQueue(asUser('someone-else-uid', { mode: 'voice' })),
+      joinQueue(asUser('someone-else-uid', { mode: 'video' })),
       rejectsWithCode('unavailable')
     );
     await assert.rejects(feed(asUser(ALICE)), rejectsWithCode('unavailable'));
@@ -154,15 +154,15 @@ describe('kill switch — config/runtime flips features off without a deploy', (
     await db.doc('config/runtime').set({ discoveryEnabled: false });
     await assert.rejects(feed(asUser(ALICE)), rejectsWithCode('unavailable'));
     // Matchmaking is a different switch and stays up.
-    const join = await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const join = await joinQueue(asUser(ALICE, { mode: 'video' }));
     assert.equal(join.status, 'waiting');
   });
 
   test('flags flip back on without residue', async () => {
     await db.doc('config/runtime').set({ matchmakingEnabled: false });
-    await assert.rejects(joinQueue(asUser(ALICE, { mode: 'voice' })));
+    await assert.rejects(joinQueue(asUser(ALICE, { mode: 'video' })));
     await db.doc('config/runtime').set({ matchmakingEnabled: true });
-    const result = await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const result = await joinQueue(asUser(ALICE, { mode: 'video' }));
     assert.equal(result.status, 'waiting');
   });
 });

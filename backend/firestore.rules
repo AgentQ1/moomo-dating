@@ -112,13 +112,62 @@ service cloud.firestore {
       allow delete: if false;
 
       // -------------------------------------------------------------
-      // users/{uid}/private/onboarding — the resumable draft.
+      // users/{uid}/private/{document} — owner-only private documents.
       //
-      // Only the documented draft document, not an open-ended keyspace —
-      // arbitrary private documents would complicate deletion and migration.
+      // Two documented documents, not an open-ended keyspace — arbitrary
+      // private documents would complicate deletion and migration:
+      //
+      //   onboarding — the resumable draft.
+      //   location   — the coarse position that ranks Discover, matchmaking
+      //                and the ring fan-out by distance (proximity.ts).
+      //
+      // `location` is HERE, and not on publicProfiles, for one reason:
+      // publicProfiles allows `get` to any signed-in user who knows a uid,
+      // and a call, a match or an invite reveals one. A coordinate there
+      // would be a position-polling endpoint for anyone you have ever
+      // spoken to — the classic dating-app trilateration failure. Under
+      // users/{uid} it is isSelf-only, so NO client but its owner can read
+      // it at all. Ranking works because the Admin SDK bypasses rules.
       // -------------------------------------------------------------
+
+      // A coordinate component snapped to the ~1.11 km grid
+      // (LOCATION_GRID_DEGREES = 0.01 in proximity.ts and
+      // CoarseLocation.gridDegrees in the app). The tolerance absorbs
+      // binary floating-point error in a legitimate client's arithmetic
+      // (0.01 has no exact double representation) while still rejecting
+      // anything a tenth of a cell off-grid — i.e. any attempt to store a
+      // position finer than the grid this feature promises. Server-side
+      // enforcement matters because the client is the thing being trusted
+      // to coarsen, and a tampered build would otherwise upload GPS-exact
+      // coordinates into its own private document.
+      function isCoarseGridValue(value, limit) {
+        return value is number
+               && value >= -limit && value <= limit
+               && math.abs(value * 100 - math.round(value * 100)) < 0.001;
+      }
+
+      function isCoarseLocation(data) {
+        return data.keys().hasOnly(['lat', 'lng', 'updatedAt'])
+               && data.keys().hasAll(['lat', 'lng', 'updatedAt'])
+               && isCoarseGridValue(data.lat, 90)
+               && isCoarseGridValue(data.lng, 180)
+               // The server's clock, not a claimed one: staleness decides
+               // whether a position still ranks (LOCATION_MAX_AGE_MS), so a
+               // client that could backdate or postdate it could keep a
+               // position alive forever.
+               && data.updatedAt == request.time;
+      }
+
       match /private/{document} {
-        allow read, write: if isSelf(uid) && document == 'onboarding';
+        allow read: if isSelf(uid)
+                    && (document == 'onboarding' || document == 'location');
+        allow write: if isSelf(uid) && document == 'onboarding';
+        // Owner-written, but only ever a well-formed coarse position.
+        allow create, update: if isSelf(uid)
+                              && document == 'location'
+                              && isCoarseLocation(request.resource.data);
+        // Turning location sharing off is the owner's to do at any time.
+        allow delete: if isSelf(uid) && document == 'location';
       }
 
       // -------------------------------------------------------------
@@ -176,8 +225,8 @@ service cloud.firestore {
       function publicSchemaOnly(data) {
         return data.keys().hasOnly([
           'uid', 'displayName', 'age', 'city', 'gender', 'interestedIn',
-          'photoPaths', 'occupation', 'lastActiveAt', 'activityBucket',
-          'updatedAt', 'wantsToTalk', 'boostedUntil'
+          'datingIntention', 'photoPaths', 'occupation', 'lastActiveAt',
+          'activityBucket', 'updatedAt', 'wantsToTalk', 'boostedUntil'
         ]);
       }
 
@@ -215,6 +264,14 @@ service cloud.firestore {
                       && data.interestedIn.size() >= 1
                       && data.interestedIn.size() <= 3
                       && data.interestedIn.hasOnly(['women', 'men', 'everyone'])))
+               // Matchmaking refuses to pair incompatible intentions, so an
+               // unrecognised value here would decide who someone meets.
+               // Catalog-checked, exactly like gender.
+               && (!('datingIntention' in data)
+                  || data.datingIntention in ['lifePartner', 'longTerm',
+                                              'longTermOpenToShort',
+                                              'shortTermOpenToLong',
+                                              'shortTerm', 'figuringItOut'])
                && (!('occupation' in data)
                   || (data.occupation is string && data.occupation.size() <= 100))
                && photoPathsValid(data);

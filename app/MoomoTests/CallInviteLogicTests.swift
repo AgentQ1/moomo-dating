@@ -87,7 +87,11 @@ final class CallInviteLogicTests: XCTestCase {
         XCTAssertEqual(sparse.caller.pronoun, .they)
         XCTAssertFalse(sparse.caller.isVerified)
         XCTAssertNil(sparse.caller.photoPath)
-        XCTAssertEqual(sparse.mode, .voice)
+        XCTAssertEqual(
+            sparse.mode, .voice,
+            "Decoding still understands the retired voice mode — the banner is "
+                + "where an unanswerable ring is turned away, not the decoder"
+        )
     }
 
     func testRejectsCacheSnapshots() {
@@ -164,7 +168,7 @@ final class CallInviteLogicTests: XCTestCase {
 
     func testMockAcceptReturnsTheCallerAndConsumesTheRing() async throws {
         let calls = MockCallService()
-        let invite = calls.simulateIncomingInvite(caller: kenji, mode: .voice)
+        let invite = calls.simulateIncomingInvite(caller: kenji, mode: .video)
 
         let caller = try await calls.acceptInvite(invite)
 
@@ -177,7 +181,7 @@ final class CallInviteLogicTests: XCTestCase {
         XCTAssertEqual(latest, .some(nil), "an answered ring is consumed")
 
         // The accepted caller must connect through the existing path.
-        let session = try await calls.connect(to: caller, mode: .voice)
+        let session = try await calls.connect(to: caller, mode: .video)
         XCTAssertEqual(session.candidate, kenji)
     }
 

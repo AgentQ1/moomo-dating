@@ -100,9 +100,15 @@ export const getCallMediaToken = onCall(
       roomJoin: true,
       canPublish: true,
       canSubscribe: true,
-      // Chat lives in Firestore where rules and moderation apply — the media
-      // channel must not become an unmoderated side channel.
-      canPublishData: false,
+      // Data messages carry the in-call experiences: the date icebreakers'
+      // commit/reveal handshake and Go Play's game invitations, all scoped to
+      // the `baybe.callgames.v1` topic and dropped by the client on any other.
+      //
+      // Chat still lives in Firestore, where rules and moderation apply —
+      // the app never renders a received packet as user-authored text, so
+      // this channel cannot become an unmoderated messaging side channel.
+      // The grant is per-room and dies with the call's token.
+      canPublishData: true,
     });
 
     return {

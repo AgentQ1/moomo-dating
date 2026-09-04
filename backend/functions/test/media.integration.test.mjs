@@ -84,7 +84,16 @@ describe('getCallMediaToken', () => {
     assert.equal(payload.video.roomJoin, true);
     assert.equal(payload.video.canPublish, true);
     assert.equal(payload.video.canSubscribe, true);
-    assert.equal(payload.video.canPublishData, false, 'no unmoderated data channel');
+    // The data channel carries the in-call experiences (icebreakers, Go
+    // Play), so it is granted — but only inside this one room, and only for
+    // as long as the call's token lives. Chat stays in Firestore, where rules
+    // and moderation apply; the client renders no received packet as text.
+    assert.equal(
+      payload.video.canPublishData,
+      true,
+      'the in-call data channel must be granted'
+    );
+    assert.equal(payload.video.room, 's1', 'and it is scoped to this room alone');
 
     // Clock-bound: 180s max − 30s elapsed + 90s grace = 240s; allow slack.
     const lifetime = payload.exp - Math.floor(Date.now() / 1000);

@@ -61,13 +61,13 @@ describe('matchmaking spine — join → pair → end → decide → match', () 
     await seedProfiles();
 
     // Alice joins an empty queue: she waits, and Discover advertises her.
-    const aliceJoin = await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const aliceJoin = await joinQueue(asUser(ALICE, { mode: 'video' }));
     assert.equal(aliceJoin.status, 'waiting');
     assert.equal((await db.doc(`matchmakingQueue/${ALICE}`).get()).get('status'), 'waiting');
     assert.equal((await db.doc(`publicProfiles/${ALICE}`).get()).get('wantsToTalk'), true);
 
     // Bob joins: paired immediately, one transaction.
-    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
     assert.equal(bobJoin.status, 'matched');
     const { sessionId, participants } = bobJoin.session;
     assert.deepEqual(Object.keys(participants).sort(), [ALICE, BOB].sort());
@@ -124,15 +124,15 @@ describe('matchmaking spine — join → pair → end → decide → match', () 
   test('a repeat pairing between the same two people reuses the match', async () => {
     await seedProfiles();
     // First round: pair, end, mutual like.
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
-    const first = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const first = await joinQueue(asUser(BOB, { mode: 'video' }));
     await endCall(asUser(ALICE, { sessionId: first.session.sessionId, reason: 'ended' }));
     await decide(asUser(ALICE, { sessionId: first.session.sessionId, decision: 'like' }));
     await decide(asUser(BOB, { sessionId: first.session.sessionId, decision: 'like' }));
 
     // Second round, same pair.
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
-    const second = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const second = await joinQueue(asUser(BOB, { mode: 'video' }));
     await endCall(asUser(ALICE, { sessionId: second.session.sessionId, reason: 'ended' }));
     await decide(asUser(ALICE, { sessionId: second.session.sessionId, decision: 'like' }));
     const outcome = await decide(asUser(BOB, { sessionId: second.session.sessionId, decision: 'like' }));
@@ -145,8 +145,8 @@ describe('matchmaking spine — join → pair → end → decide → match', () 
 
   test('a pass stays invisible: the liker sees likeSent, no match ever exists', async () => {
     await seedProfiles();
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
-    const { session } = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const { session } = await joinQueue(asUser(BOB, { mode: 'video' }));
     await endCall(asUser(BOB, { sessionId: session.sessionId, reason: 'ended' }));
 
     await decide(asUser(BOB, { sessionId: session.sessionId, decision: 'pass' }));
@@ -161,18 +161,18 @@ describe('matchmaking spine — join → pair → end → decide → match', () 
     await db.doc(`blocks/${ALICE}/blocked/${BOB}`).set({ displayName: 'Bob', createdAt: Timestamp.now() });
 
     // Alice waits; Bob (whom she blocked) joins — he must NOT get her.
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
-    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
     assert.equal(bobJoin.status, 'waiting', 'the blocked pair must not be matched');
-
-    // Different mode never pairs either.
-    const videoJoin = await joinQueue(asUser('carol-mm-uid', { mode: 'video' }));
-    assert.equal(videoJoin.status, 'waiting', 'voice and video queues are separate');
+    assert.equal(
+      (await db.collection('callSessions').get()).size, 0,
+      'and no session is created for them'
+    );
   });
 
   test('leaving the queue removes the waiting entry and the advertisement', async () => {
     await seedProfiles();
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
 
     await leaveQueue(asUser(ALICE));
 
@@ -194,8 +194,8 @@ describe('preference-aware pairing — only mutually compatible users are paired
     await seedProfile(ALICE, { gender: 'woman', interestedIn: ['women'] });
     await seedProfile(BOB, { gender: 'man', interestedIn: ['women'] });
 
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
-    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
 
     assert.equal(bobJoin.status, 'waiting', 'he wants her, she does not want him — no pair');
     assert.equal((await db.collection('callSessions').get()).size, 0);
@@ -205,8 +205,63 @@ describe('preference-aware pairing — only mutually compatible users are paired
     await seedProfile(ALICE, { gender: 'woman', interestedIn: ['men'] });
     await seedProfile(BOB, { gender: 'man', interestedIn: ['women'] });
 
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
-    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
+
+    assert.equal(bobJoin.status, 'matched');
+  });
+
+  test('incompatible dating intentions never pair, even when genders line up', async () => {
+    await seedProfile(ALICE, {
+      gender: 'woman',
+      interestedIn: ['men'],
+      datingIntention: 'lifePartner',
+    });
+    await seedProfile(BOB, {
+      gender: 'man',
+      interestedIn: ['women'],
+      datingIntention: 'shortTerm',
+    });
+
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
+
+    assert.equal(
+      bobJoin.status,
+      'waiting',
+      'a life-partner seeker must not be paired with a short-term seeker'
+    );
+    assert.equal((await db.collection('callSessions').get()).size, 0);
+  });
+
+  test('an "open to" intention bridges the two ends of the spectrum', async () => {
+    await seedProfile(ALICE, {
+      gender: 'woman',
+      interestedIn: ['men'],
+      datingIntention: 'lifePartner',
+    });
+    await seedProfile(BOB, {
+      gender: 'man',
+      interestedIn: ['women'],
+      datingIntention: 'shortTermOpenToLong',
+    });
+
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
+
+    assert.equal(bobJoin.status, 'matched');
+  });
+
+  test('a missing dating intention still pairs — legacy accounts are not locked out', async () => {
+    await seedProfile(ALICE, { gender: 'woman', interestedIn: ['men'] });
+    await seedProfile(BOB, {
+      gender: 'man',
+      interestedIn: ['women'],
+      datingIntention: 'lifePartner',
+    });
+
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
 
     assert.equal(bobJoin.status, 'matched');
   });
@@ -218,12 +273,12 @@ describe('preference-aware pairing — only mutually compatible users are paired
     await seedProfile(ALICE, { gender: 'woman', interestedIn: ['everyone'] });
 
     // Bob (wants women only) joins while Carol (non-binary) waits: no pair.
-    await joinQueue(asUser(CAROL, { mode: 'voice' }));
-    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await joinQueue(asUser(CAROL, { mode: 'video' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
     assert.equal(bobJoin.status, 'waiting');
 
     // Alice (everyone) joins: she pairs with Carol, the older waiter.
-    const aliceJoin = await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const aliceJoin = await joinQueue(asUser(ALICE, { mode: 'video' }));
     assert.equal(aliceJoin.status, 'matched');
     assert.ok(aliceJoin.session.participants[CAROL], 'everyone ↔ everyone pairs');
   });
@@ -232,8 +287,8 @@ describe('preference-aware pairing — only mutually compatible users are paired
     await seedProfile(ALICE, {});
     await seedProfile(BOB, { gender: 'man', interestedIn: ['everyone'] });
 
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
-    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
 
     assert.equal(bobJoin.status, 'matched');
   });
@@ -242,8 +297,8 @@ describe('preference-aware pairing — only mutually compatible users are paired
     await seedProfile(ALICE, { gender: 'woman', interestedIn: ['women'] });
     await seedProfile(BOB, { gender: 'man', interestedIn: ['women'] });
 
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
-    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice', preferredPeerId: ALICE }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video', preferredPeerId: ALICE }));
 
     assert.equal(bobJoin.status, 'waiting', 'an explicit invitation must not override her preferences');
     assert.equal((await db.collection('callSessions').get()).size, 0);
@@ -263,8 +318,8 @@ describe('pass severance — a pass is a recorded choice the queue must respect'
 
   /** Pair Alice and Bob, end the call, record Alice's pass on Bob. */
   async function pairAndPass() {
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
-    const { session } = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const { session } = await joinQueue(asUser(BOB, { mode: 'video' }));
     await endCall(asUser(ALICE, { sessionId: session.sessionId, reason: 'ended' }));
     await decide(asUser(ALICE, { sessionId: session.sessionId, decision: 'pass' }));
     return session.sessionId;
@@ -291,14 +346,14 @@ describe('pass severance — a pass is a recorded choice the queue must respect'
     await pairAndPass();
 
     // Bob rejoins first and waits; Alice's join must skip past him.
-    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
     assert.equal(bobJoin.status, 'waiting');
-    const aliceJoin = await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const aliceJoin = await joinQueue(asUser(ALICE, { mode: 'video' }));
     assert.equal(aliceJoin.status, 'waiting', 'she passed on him — never again');
 
     // Carol joins: she pairs with Bob, the older waiter — the severance
     // belongs to the pair, not to either person.
-    const carolJoin = await joinQueue(asUser(CAROL, { mode: 'voice' }));
+    const carolJoin = await joinQueue(asUser(CAROL, { mode: 'video' }));
     assert.equal(carolJoin.status, 'matched');
     assert.ok(carolJoin.session.participants[BOB], 'Bob is still matchable with others');
     assert.equal(
@@ -312,8 +367,8 @@ describe('pass severance — a pass is a recorded choice the queue must respect'
     await seedProfiles();
     await pairAndPass();
 
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
-    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice', preferredPeerId: ALICE }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video', preferredPeerId: ALICE }));
 
     assert.equal(bobJoin.status, 'waiting', 'an invitation must not override her pass');
     const active = await db.collection('callSessions').where('status', '==', 'active').get();
@@ -347,8 +402,8 @@ describe('boost priority — an active boost really moves you up the queue', () 
     });
     await seedProfile(ALICE, { gender: 'woman', interestedIn: ['men'] });
 
-    await joinQueue(asUser(CAROL, { mode: 'voice' }));
-    const daveJoin = await joinQueue(asUser(DAVE, { mode: 'voice' }));
+    await joinQueue(asUser(CAROL, { mode: 'video' }));
+    const daveJoin = await joinQueue(asUser(DAVE, { mode: 'video' }));
     assert.equal(daveJoin.status, 'waiting', 'precondition: both are waiting');
   }
 
@@ -357,7 +412,7 @@ describe('boost priority — an active boost really moves you up the queue', () 
       daveBoostedUntil: Timestamp.fromMillis(Date.now() + 30 * 60 * 1000),
     });
 
-    const aliceJoin = await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const aliceJoin = await joinQueue(asUser(ALICE, { mode: 'video' }));
 
     assert.equal(aliceJoin.status, 'matched');
     assert.ok(
@@ -376,7 +431,7 @@ describe('boost priority — an active boost really moves you up the queue', () 
       daveBoostedUntil: Timestamp.fromMillis(Date.now() - 1000),
     });
 
-    const aliceJoin = await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const aliceJoin = await joinQueue(asUser(ALICE, { mode: 'video' }));
 
     assert.equal(aliceJoin.status, 'matched');
     assert.ok(aliceJoin.session.participants[CAROL], 'oldest waiter wins without a live boost');
@@ -388,7 +443,7 @@ describe('boost priority — an active boost really moves you up the queue', () 
     });
 
     const aliceJoin = await joinQueue(
-      asUser(ALICE, { mode: 'voice', preferredPeerId: CAROL })
+      asUser(ALICE, { mode: 'video', preferredPeerId: CAROL })
     );
 
     assert.equal(aliceJoin.status, 'matched');
@@ -405,7 +460,7 @@ describe('stale queue hygiene — abandoned entries never become ghost calls', (
   async function seedAbandonedEntry(uid, ageSeconds) {
     await db.doc(`matchmakingQueue/${uid}`).set({
       uid,
-      mode: 'voice',
+      mode: 'video',
       status: 'waiting',
       createdAt: secondsAgo(ageSeconds),
       updatedAt: secondsAgo(ageSeconds),
@@ -420,7 +475,7 @@ describe('stale queue hygiene — abandoned entries never become ghost calls', (
     // 60s: past the 40s TTL (dead client) but under the 80s sweep threshold.
     await seedAbandonedEntry(ALICE, 60);
 
-    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice', preferredPeerId: ALICE }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video', preferredPeerId: ALICE }));
 
     assert.equal(bobJoin.status, 'waiting', 'a 60s-old entry is a dead client, not a partner');
     assert.equal((await db.collection('callSessions').get()).size, 0, 'no ghost session exists');
@@ -442,7 +497,7 @@ describe('stale queue hygiene — abandoned entries never become ghost calls', (
 
   test('the scheduled sweep leaves genuinely waiting entries alone', async () => {
     await seedProfiles();
-    await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await joinQueue(asUser(BOB, { mode: 'video' }));
     await seedAbandonedEntry(ALICE, 120);
 
     await functions.sweepMatchmakingQueue.run({});
@@ -458,7 +513,7 @@ describe('stale queue hygiene — abandoned entries never become ghost calls', (
     await seedProfiles();
     await seedAbandonedEntry(ALICE, 120);
 
-    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
     assert.equal(bobJoin.status, 'waiting', 'a 120s-old entry is still never a partner');
 
     // The stale entry remains until the scheduled sweep — the join-time
@@ -469,8 +524,8 @@ describe('stale queue hygiene — abandoned entries never become ghost calls', (
 
   test('the sweep never touches matched entries of a call that may still be live', async () => {
     await seedProfiles();
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
-    const paired = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const paired = await joinQueue(asUser(BOB, { mode: 'video' }));
     assert.equal(paired.status, 'matched');
 
     // 100s into a 180s call: past the waiting-stale threshold (80s), but the
@@ -501,10 +556,10 @@ describe('stale queue hygiene — abandoned entries never become ghost calls', (
       await seedAbandonedEntry(`dead-${i}`, 50);
       await db.doc(`matchmakingQueue/dead-${i}`).update({ shard: 0 });
     }
-    const aliceJoin = await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const aliceJoin = await joinQueue(asUser(ALICE, { mode: 'video' }));
     assert.equal(aliceJoin.status, 'waiting', 'Alice waits — the dead are not partners');
 
-    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
 
     assert.equal(bobJoin.status, 'matched', 'the fresh waiter is found behind the dead window');
     assert.ok(bobJoin.session.participants[ALICE]);
@@ -514,7 +569,7 @@ describe('stale queue hygiene — abandoned entries never become ghost calls', (
     await seedProfiles();
     await seedAbandonedEntry(ALICE, 120);
 
-    const rejoin = await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    const rejoin = await joinQueue(asUser(ALICE, { mode: 'video' }));
 
     assert.equal(rejoin.status, 'waiting');
     const entry = await db.doc(`matchmakingQueue/${ALICE}`).get();
@@ -536,12 +591,12 @@ describe('join idempotency — a duplicate join returns the existing live sessio
 
   test('a retried join after pairing returns the same session, never a second one', async () => {
     await seedProfiles();
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
-    const first = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const first = await joinQueue(asUser(BOB, { mode: 'video' }));
     assert.equal(first.status, 'matched');
 
     // The client's network dropped the response; it retries the call.
-    const retry = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    const retry = await joinQueue(asUser(BOB, { mode: 'video' }));
 
     assert.equal(retry.status, 'matched');
     assert.equal(retry.session.sessionId, first.session.sessionId, 'same session, not a new pairing');
@@ -552,32 +607,50 @@ describe('join idempotency — a duplicate join returns the existing live sessio
 
   test('after the call ends, a rejoin is a genuine new join', async () => {
     await seedProfiles();
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
-    const first = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const first = await joinQueue(asUser(BOB, { mode: 'video' }));
     await endCall(asUser(BOB, { sessionId: first.session.sessionId, reason: 'ended' }));
 
-    const rejoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    const rejoin = await joinQueue(asUser(BOB, { mode: 'video' }));
 
     assert.equal(rejoin.status, 'waiting', 'an ended session is not resurrected');
     assert.equal((await db.doc(`matchmakingQueue/${BOB}`).get()).get('status'), 'waiting');
   });
 
-  test('a join for a DIFFERENT mode never returns the live session of the old one', async () => {
+  test('a join never returns a live session in a mode it did not ask for', async () => {
+    // The client labels a call with the mode it requested. Now that voice is
+    // retired, the only way this mismatch can arise is a stored voice
+    // session left over from before — which a video join must still refuse
+    // to be handed, rather than rendering the wrong call entirely.
     await seedProfiles();
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
-    const voice = await joinQueue(asUser(BOB, { mode: 'voice' }));
-    assert.equal(voice.status, 'matched');
+    const now = Timestamp.now();
+    await db.doc('callSessions/legacy-voice-session').set({
+      participantIds: [ALICE, BOB],
+      participants: {
+        [ALICE]: { uid: ALICE, displayName: 'Alice' },
+        [BOB]: { uid: BOB, displayName: 'Bob' },
+      },
+      mode: 'voice',
+      status: 'active',
+      startedAt: now,
+      maxDurationSeconds: 180,
+    });
+    await db.doc(`matchmakingQueue/${BOB}`).set({
+      uid: BOB,
+      mode: 'voice',
+      status: 'matched',
+      sessionId: 'legacy-voice-session',
+      createdAt: now,
+    });
 
-    // The client labels a call with the mode it requested — handing a video
-    // join a live voice session would render the wrong call entirely.
     const videoJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
 
-    assert.equal(videoJoin.status, 'waiting', 'a video join is a new join, not the voice session');
+    assert.equal(videoJoin.status, 'waiting', 'a video join is a new join, not the old voice session');
   });
 
   test('enqueueing stamps the public activityBucket server-side (feed visibility)', async () => {
     await seedProfiles();
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
 
     const profile = await db.doc(`publicProfiles/${ALICE}`).get();
     const bucket = profile.get('activityBucket');
@@ -603,7 +676,7 @@ describe('sharded waiting pool — contention relief must never hide waiting use
     const now = Timestamp.now();
     await db.doc(`matchmakingQueue/${uid}`).set({
       uid,
-      mode: 'voice',
+      mode: 'video',
       status: 'waiting',
       shard,
       createdAt: now,
@@ -619,7 +692,7 @@ describe('sharded waiting pool — contention relief must never hide waiting use
       await seedProfiles();
       await seedWaiting(ALICE, shard);
 
-      const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+      const bobJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
 
       assert.equal(bobJoin.status, 'matched', `waiter in shard ${shard} must be found`);
       assert.ok(bobJoin.session.participants[ALICE]);
@@ -634,7 +707,7 @@ describe('sharded waiting pool — contention relief must never hide waiting use
     }
 
     const results = await Promise.all(
-      users.map((uid) => joinQueue(asUser(uid, { mode: 'voice' })))
+      users.map((uid) => joinQueue(asUser(uid, { mode: 'video' })))
     );
 
     // Every call resolved to a definite state.
@@ -679,8 +752,8 @@ describe('decisions after a block — a block placed after the session severs th
   /** Pair the two through the real queue and return the session id. */
   async function pairUp() {
     await seedProfiles();
-    await joinQueue(asUser(ALICE, { mode: 'voice' }));
-    const bobJoin = await joinQueue(asUser(BOB, { mode: 'voice' }));
+    await joinQueue(asUser(ALICE, { mode: 'video' }));
+    const bobJoin = await joinQueue(asUser(BOB, { mode: 'video' }));
     return bobJoin.session.sessionId;
   }
 
@@ -755,5 +828,211 @@ describe('decisions after a block — a block placed after the session severs th
     const bobPass = await decide(asUser(BOB, { sessionId, decision: 'pass' }));
     assert.equal(bobPass.outcome, 'passed');
     assert.equal((await db.doc(`users/${BOB}/callHistory/${sessionId}`).get()).get('outcome'), 'blocked');
+  });
+});
+
+/**
+ * Proximity inside the pairing window.
+ *
+ * The queue's fairness rule is oldest-first, and proximity does NOT replace
+ * it — it reorders the bounded candidate window the FIFO scan already
+ * produced. So the properties worth pinning are: a nearer waiter inside the
+ * window is preferred, and nobody is ever skipped for lacking a location.
+ */
+describe('joinMatchmakingQueue — closer waiters are tried first', () => {
+  beforeEach(clearFirestore);
+
+  const CHICAGO = { lat: 41.88, lng: -87.63 };
+  const EVANSTON = { lat: 42.05, lng: -87.68 }; // ~19 km
+  const NEW_YORK = { lat: 40.71, lng: -74.01 }; // ~1145 km
+
+  const JOINER = 'joiner-prox-uid';
+
+  /**
+   * A user already waiting in the queue, written directly.
+   *
+   * Deliberately NOT via joinQueue: everyone here is mutually compatible, so
+   * a second joinQueue call would pair the two waiters with each other and
+   * leave an empty pool. `waitedSeconds` sets the FIFO position — the higher,
+   * the older, the earlier strict oldest-first would reach them. Keep it well
+   * inside QUEUE_ENTRY_TTL_MS (40 s): past the TTL an entry is stale and never
+   * enters the candidate window, which would make these assertions pass by
+   * accident rather than by proximity.
+   */
+  async function seedWaiter(uid, place, waitedSeconds) {
+    const now = Timestamp.now();
+    const joinedAt = Timestamp.fromMillis(now.toMillis() - waitedSeconds * 1000);
+    await db.doc(`publicProfiles/${uid}`).set({
+      displayName: uid, age: 30, wantsToTalk: true, updatedAt: now,
+    });
+    if (place) {
+      await db.doc(`users/${uid}/private/location`).set({ ...place, updatedAt: now });
+    }
+    await db.doc(`matchmakingQueue/${uid}`).set({
+      uid,
+      mode: 'video',
+      status: 'waiting',
+      // QUEUE_SHARD_COUNT is 1 in this file, so every entry lives in shard 0.
+      shard: 0,
+      createdAt: joinedAt,
+      updatedAt: joinedAt,
+    });
+  }
+
+  async function seedJoiner(place) {
+    const now = Timestamp.now();
+    await db.doc(`publicProfiles/${JOINER}`).set({
+      displayName: 'Joiner', age: 29, updatedAt: now,
+    });
+    if (place) {
+      await db.doc(`users/${JOINER}/private/location`).set({ ...place, updatedAt: now });
+    }
+  }
+
+  test('the nearer of two waiting users is paired, though the far one waited longer', async () => {
+    // Far waiter joins FIRST, so strict FIFO would pick them. Proximity
+    // reorders inside the window — this is the whole behaviour change.
+    await seedWaiter('far-waiter', NEW_YORK, 30);
+    await seedWaiter('near-waiter', EVANSTON, 5);
+    await seedJoiner(CHICAGO);
+
+    const result = await joinQueue(asUser(JOINER, { mode: 'video' }));
+
+    assert.equal(result.status, 'matched');
+    assert.ok(
+      Object.keys(result.session.participants).includes('near-waiter'),
+      'the closer waiter should have been paired'
+    );
+  });
+
+  test('a joiner with NO location falls back to oldest-first, pairing nobody new', async () => {
+    // The denied-permission path: with no viewer position every candidate
+    // scores the same, the stable sort is a no-op, and FIFO decides exactly
+    // as it did before proximity existed.
+    await seedWaiter('first-waiter', NEW_YORK, 30);
+    await seedWaiter('second-waiter', EVANSTON, 5);
+    await seedJoiner(null);
+
+    const result = await joinQueue(asUser(JOINER, { mode: 'video' }));
+
+    assert.equal(result.status, 'matched');
+    assert.ok(Object.keys(result.session.participants).includes('first-waiter'));
+  });
+
+  test('a waiter with no location is still paired when they are the only one', async () => {
+    // The exclusion failure this feature must not reintroduce: an account
+    // that shares nothing must remain matchable.
+    await seedWaiter('unlocated-waiter', null, 30);
+    await seedJoiner(CHICAGO);
+
+    const result = await joinQueue(asUser(JOINER, { mode: 'video' }));
+
+    assert.equal(result.status, 'matched');
+    assert.ok(Object.keys(result.session.participants).includes('unlocated-waiter'));
+  });
+
+  test('proximity never pairs past a block — the neighbour is skipped for the distant stranger', async () => {
+    await seedWaiter('blocked-neighbour', CHICAGO, 30);
+    await seedWaiter('distant-stranger', NEW_YORK, 5);
+    await seedJoiner(CHICAGO);
+    await db.doc(`blocks/${JOINER}/blocked/blocked-neighbour`).set({ createdAt: Timestamp.now() });
+
+    const result = await joinQueue(asUser(JOINER, { mode: 'video' }));
+
+    assert.equal(result.status, 'matched');
+    assert.ok(Object.keys(result.session.participants).includes('distant-stranger'));
+  });
+
+  test('an explicit call request still outranks a closer waiter', async () => {
+    // "Call this person" is a direct request; proximity sorts the rest of the
+    // window beneath it and must never override it.
+    await seedWaiter('near-waiter', CHICAGO, 30);
+    await seedWaiter('requested-far', NEW_YORK, 5);
+    await seedJoiner(CHICAGO);
+
+    const result = await joinQueue(
+      asUser(JOINER, { mode: 'video', preferredPeerId: 'requested-far' })
+    );
+
+    assert.equal(result.status, 'matched');
+    assert.ok(Object.keys(result.session.participants).includes('requested-far'));
+  });
+});
+
+describe('retired call modes — voice-only is unreachable, stored voice still reads', () => {
+  beforeEach(clearFirestore);
+
+  test('a voice-only queue join is refused', async () => {
+    // Speed Talk is gone. Nothing may mint a new voice-only call, however
+    // old the client asking for one is.
+    await seedProfiles();
+    await assert.rejects(
+      joinQueue(asUser(ALICE, { mode: 'voice' })),
+      (error) => {
+        assert.equal(error.code, 'invalid-argument');
+        return true;
+      }
+    );
+    const entry = await db.doc(`matchmakingQueue/${ALICE}`).get();
+    assert.equal(entry.exists, false, 'a refused join must leave no queue entry behind');
+  });
+
+  test('an unknown mode is refused the same way', async () => {
+    await seedProfiles();
+    await assert.rejects(joinQueue(asUser(ALICE, { mode: 'telepathy' })));
+  });
+
+  test('a video join still works', async () => {
+    await seedProfiles();
+    const result = await joinQueue(asUser(ALICE, { mode: 'video' }));
+    assert.equal(result.status, 'waiting');
+    assert.equal((await db.doc(`matchmakingQueue/${ALICE}`).get()).get('mode'), 'video');
+  });
+
+  test('an old voice session can still be ended and written to history', async () => {
+    // Legacy tolerance: production holds `callSessions` and call history
+    // documents that say "voice". Reads must keep working — a mode the
+    // product no longer offers is still the truth about a call that happened.
+    await seedProfiles();
+    const now = Timestamp.now();
+    await db.doc('callSessions/legacy-voice').set({
+      participantIds: [ALICE, BOB],
+      participants: {
+        [ALICE]: { uid: ALICE, displayName: 'Alice' },
+        [BOB]: { uid: BOB, displayName: 'Bob' },
+      },
+      mode: 'voice',
+      status: 'active',
+      startedAt: Timestamp.fromMillis(now.toMillis() - 30_000),
+      maxDurationSeconds: 180,
+    });
+
+    await endCall(asUser(ALICE, { sessionId: 'legacy-voice', reason: 'ended' }));
+
+    const session = await db.doc('callSessions/legacy-voice').get();
+    assert.equal(session.get('status'), 'ended');
+    const history = await db.doc(`users/${ALICE}/callHistory/legacy-voice`).get();
+    assert.equal(history.exists, true);
+    assert.equal(history.get('mode'), 'voice', 'history must keep saying what the call was');
+  });
+
+  test('a session with no mode at all reads as the mode the product runs', async () => {
+    await seedProfiles();
+    const now = Timestamp.now();
+    await db.doc('callSessions/modeless').set({
+      participantIds: [ALICE, BOB],
+      participants: {
+        [ALICE]: { uid: ALICE, displayName: 'Alice' },
+        [BOB]: { uid: BOB, displayName: 'Bob' },
+      },
+      status: 'active',
+      startedAt: Timestamp.fromMillis(now.toMillis() - 30_000),
+      maxDurationSeconds: 180,
+    });
+
+    await endCall(asUser(ALICE, { sessionId: 'modeless', reason: 'ended' }));
+
+    const history = await db.doc(`users/${ALICE}/callHistory/modeless`).get();
+    assert.equal(history.get('mode'), 'video');
   });
 });

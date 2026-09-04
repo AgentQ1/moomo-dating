@@ -20,9 +20,23 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Baybe uses your camera for 3-minute video speed calls. Your video is never recorded or stored.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Baybe uses your microphone for voice and video speed calls. Your audio is never recorded or stored.</string>
+	<string>Baybe uses your microphone for 3-minute video speed calls. Your audio is never recorded or stored.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Baybe uses your photo library so you can choose profile pictures.</string>
+	<!--
+	  When-in-use only, and two uses, both stated in the string because both
+	  are real:
+	   1. the city on your profile — reverse-geocoded on the device, and only
+	      the city name is stored (see CityLocation);
+	   2. proximity ranking — the position is rounded to a ~1.11 km grid on
+	      the device (CoarseLocationReporter) and written to the private,
+	      owner-only users/{uid}/private/location, where the backend reads it
+	      to rank closer people higher. It is never published to other users
+	      and no exact coordinate is ever stored.
+	  If this string ever stops matching that, the string is the bug.
+	-->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Baybe uses your approximate location to fill in your city and to show you people who are closer to you. Your location is rounded to about a kilometre on your device, kept private, and never shown to other people.</string>
 	<!--
 	  Store name is "Baybe" (ASC app 6793496424); the home-screen name must
 	  match it, not the internal target/product name "Moomo".

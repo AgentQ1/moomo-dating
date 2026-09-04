@@ -334,7 +334,11 @@ final class FirestoreCallService: CallService, @unchecked Sendable {
         return CallRecord(
             id: document.documentID,
             candidate: SocialDecoding.candidate(fromParticipant: peer, uid: peerID),
-            mode: (document.get("mode") as? String).flatMap(CallMode.init(rawValue:)) ?? .voice,
+            // Records written before the mode field existed (and any future
+            // mode this build doesn't know) read as the mode the product
+            // actually runs. A stored "voice" still decodes as `.voice` —
+            // history must keep telling the truth about old calls.
+            mode: (document.get("mode") as? String).flatMap(CallMode.init(rawValue:)) ?? .video,
             startedAt: SocialDecoding.date(document.get("startedAt")) ?? Date(),
             duration: document.get("durationSeconds") as? Double ?? 0,
             endReason: (document.get("endReason") as? String).flatMap(CallEndReason.init(rawValue:)) ?? .ended,

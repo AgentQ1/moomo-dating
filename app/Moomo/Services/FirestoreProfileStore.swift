@@ -104,6 +104,8 @@ struct FirestoreProfileStore: ProfileStore {
         document["interestedIn"] = profile.interestedIn.isEmpty
             ? FieldValue.delete()
             : profile.interestedIn.map(\.rawValue).sorted()
+        document["datingIntention"] = profile.datingIntention.map { $0.rawValue as Any }
+            ?? FieldValue.delete()
         if let location = profile.location {
             // City-level only. There is no coordinate field to write.
             document["locationCity"] = location.city
@@ -144,6 +146,11 @@ struct FirestoreProfileStore: ProfileStore {
         publicDocument["interestedIn"] = profile.interestedIn.isEmpty
             ? FieldValue.delete()
             : profile.interestedIn.map(\.rawValue).sorted()
+        // What they're here for. Published for the same reason as
+        // `interestedIn`: matchmaking and the discovery feed both filter on it
+        // server-side, and they read this projection, not the private doc.
+        publicDocument["datingIntention"] = profile.datingIntention.map { $0.rawValue as Any }
+            ?? FieldValue.delete()
 
         // Photo paths, so Discover can render a face without reading the
         // private document. Paths only — the bytes stay behind Storage rules,
@@ -210,6 +217,8 @@ struct FirestoreProfileStore: ProfileStore {
         profile.interestedIn = Set(
             (data["interestedIn"] as? [String] ?? []).compactMap(InterestedIn.init(rawValue:))
         )
+        profile.datingIntention = (data["datingIntention"] as? String)
+            .flatMap(DatingIntention.init(rawValue:))
         if let city = data["locationCity"] as? String,
            let country = data["locationCountry"] as? String {
             profile.location = CityLocation(

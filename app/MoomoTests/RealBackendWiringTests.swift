@@ -71,7 +71,7 @@ final class RealBackendWiringTests: XCTestCase {
         )
     ) async -> (CallFlowModel, MockCallService) {
         let flow = CallFlowModel(
-            mode: .voice,
+            mode: .video,
             preferred: kenji,
             calls: calls,
             matches: matches,

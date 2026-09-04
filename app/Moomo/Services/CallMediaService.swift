@@ -29,6 +29,23 @@ protocol CallMediaService: Sendable {
 
     func setMuted(_ muted: Bool) async throws
     func setCameraEnabled(_ enabled: Bool) async throws
+
+    /// Swaps capture between the front and back camera without touching the
+    /// published track, the room, or anything else about the call. Lives on
+    /// this boundary rather than in the call screen so the view never needs a
+    /// capture device — or a LiveKit `Room` — to offer the control.
+    ///
+    /// A provider with no camera to swap does nothing rather than throwing:
+    /// there is no honest error to show for "this build has no camera".
+    func flipCamera() async throws
+
+    /// The in-call data channel, when this provider has one — see
+    /// `CallDataTransport`, which also supplies the `nil` default. A real
+    /// protocol requirement rather than extension-only, so a provider that
+    /// *does* have a channel is actually asked: an extension member is
+    /// dispatched statically, and every caller holding a `CallMediaService`
+    /// would silently get the default.
+    var dataTransport: CallDataTransport? { get }
 }
 
 enum CallMediaState: Equatable, Sendable {
@@ -85,6 +102,7 @@ struct UnavailableCallMediaService: CallMediaService {
     func leave() async {}
     func setMuted(_ muted: Bool) async throws {}
     func setCameraEnabled(_ enabled: Bool) async throws {}
+    func flipCamera() async throws {}
 }
 
 #if DEBUG
@@ -100,13 +118,53 @@ final class MockCallMediaService: CallMediaService, @unchecked Sendable {
     /// default so the simulated world behaves like a call that worked; ghost
     /// tests pass false and (optionally) arrive late via `simulatePeerJoined`.
     private let peerJoins: Bool
+    /// Whether the mock world answers icebreakers and game invitations. On by
+    /// default so both are exercisable on a single simulator; tests that only
+    /// care about the call turn it off.
+    private let simulatesGameOpponent: Bool
     private let broadcaster = StreamBroadcaster<CallMediaState>(.idle)
     private let presenceBroadcaster = StreamBroadcaster<Bool>(false)
 
-    init(joinError: CallMediaError? = nil, controlsFail: Bool = false, peerJoins: Bool = true) {
+    private let transportLock = NSLock()
+    private var loopback: LoopbackDataTransport?
+    private var partner: SimulatedCallGamePartner?
+    private var joins = 0
+    private var leaves = 0
+    private var flips = 0
+
+    /// How many times a room has been joined and left. Neither in-call
+    /// experience may move either number: answering a prompt, starting a
+    /// game, and walking out of one are not media operations, and a test says
+    /// so out loud.
+    var joinCount: Int { transportLock.withLock { joins } }
+    var leaveCount: Int { transportLock.withLock { leaves } }
+
+    /// How many times the camera has been flipped. There is no camera to
+    /// flip in the simulated world, so the count is the only observable
+    /// effect — and it is what proves the control reaches the media plane
+    /// instead of being handled inside the view.
+    var flipCount: Int { transportLock.withLock { flips } }
+
+    /// The mock's local participant identity. Deliberately sorts before any
+    /// candidate id, so the simulated world exercises the half of a tie-break
+    /// that wins it.
+    static let mockLocalIdentity = "a-local-player"
+
+    var dataTransport: CallDataTransport? {
+        transportLock.lock(); defer { transportLock.unlock() }
+        return loopback
+    }
+
+    init(
+        joinError: CallMediaError? = nil,
+        controlsFail: Bool = false,
+        peerJoins: Bool = true,
+        simulatesGameOpponent: Bool = true
+    ) {
         self.joinError = joinError
         self.controlsFail = controlsFail
         self.peerJoins = peerJoins
+        self.simulatesGameOpponent = simulatesGameOpponent
     }
 
     var stateStream: AsyncStream<CallMediaState> { broadcaster.stream() }
@@ -114,6 +172,7 @@ final class MockCallMediaService: CallMediaService, @unchecked Sendable {
     var remotePresenceStream: AsyncStream<Bool> { presenceBroadcaster.stream() }
 
     func join(session: CallSession) async throws {
+        transportLock.withLock { joins += 1 }
         broadcaster.send(.connecting)
         if let joinError {
             broadcaster.send(.failed(joinError.errorDescription ?? "failed"))
@@ -123,9 +182,36 @@ final class MockCallMediaService: CallMediaService, @unchecked Sendable {
         if peerJoins {
             presenceBroadcaster.send(true)
         }
+
+        // The far half of the pair is the stand-in partner, so the prompts
+        // and the game picker have someone to answer them in a world with
+        // only one device.
+        if simulatesGameOpponent {
+            let (local, peer) = LoopbackDataTransport.pair(
+                Self.mockLocalIdentity,
+                session.candidate.id
+            )
+            let partner = SimulatedCallGamePartner(
+                transport: peer,
+                seat: CallGameSeat(
+                    id: session.candidate.id,
+                    displayName: session.candidate.displayName,
+                    photoPath: session.candidate.photoPath
+                )
+            )
+            transportLock.withLock {
+                self.loopback = local
+                self.partner = partner
+            }
+        }
     }
 
     func leave() async {
+        transportLock.withLock {
+            leaves += 1
+            loopback = nil
+            partner = nil
+        }
         broadcaster.send(.disconnected)
         presenceBroadcaster.send(false)
     }
@@ -136,6 +222,11 @@ final class MockCallMediaService: CallMediaService, @unchecked Sendable {
 
     func setCameraEnabled(_ enabled: Bool) async throws {
         if controlsFail { throw CallMediaError.connectFailed }
+    }
+
+    func flipCamera() async throws {
+        if controlsFail { throw CallMediaError.connectFailed }
+        transportLock.withLock { flips += 1 }
     }
 
     /// Test hook: the transport dies mid-call (network loss the provider

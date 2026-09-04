@@ -1,7 +1,14 @@
-# Moomo — speed dating
+# Baybe — speed dating
 
 Native SwiftUI iOS app. Three-minute video and voice speed calls, mutual-match
 gating, and 24-hour chat windows.
+
+**The product is called Baybe** — that is the App Store name, the home-screen
+name (`CFBundleDisplayName`), the wordmark, and the name in every string a user
+reads. "Moomo" survives only as infrastructure that cannot be renamed without
+breaking the shipped app: the bundle ID `com.moomo.dating`, the Firebase
+project `moomo-c7a37`, the Xcode target/scheme, and the `app/Moomo/` source
+directory. None of those are user-visible. Do not "fix" them.
 
 Greenfield as of 2026-07-15. Unrelated to the Moomo AI app in `~/moomo-ios` and
 `~/Desktop/MoomoAI`, which is a different product and is not touched by this
@@ -41,8 +48,8 @@ auth method), onboarding, all five tabs (Discover, Calls, Matches, Chat,
 Profile), speed calls over LiveKit with server matchmaking, mutual-match
 gating, chat, blocking/reporting, boosts, and account deletion.
 
-Chat is organised Hinge-style: collapsible Your turn / Their turn / Hidden
-sections, a your-turn count badge on the Chat tab, swipe-left row actions
+Chat is organised by whose turn it is: collapsible Your turn / Their turn /
+Hidden sections, a your-turn count badge on the Chat tab, swipe-left row actions
 (Unmatch with a private reason, Hide/Unhide, We Met), and Block/Report/Unmatch
 menus on the chat thread and match cards. Per-user hidden/met state lives on
 the conversation document; unmatching goes through the `unmatchUser` callable.

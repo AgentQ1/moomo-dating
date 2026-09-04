@@ -33,7 +33,7 @@ final class IncomingCallModelTests: XCTestCase {
         let model = IncomingCallModel(calls: calls, ringSeconds: 0.15)
         await settle(50)
 
-        calls.simulateIncomingInvite(caller: kenji, mode: .voice)
+        calls.simulateIncomingInvite(caller: kenji, mode: .video)
         await settle(60)
         XCTAssertNotNil(model.invite, "still inside the ring window")
 
@@ -76,7 +76,7 @@ final class IncomingCallModelTests: XCTestCase {
         let calls = MockCallService()
         let model = IncomingCallModel(calls: calls)
         await settle(50)
-        let invite = calls.simulateIncomingInvite(caller: kenji, mode: .voice)
+        let invite = calls.simulateIncomingInvite(caller: kenji, mode: .video)
         await settle()
 
         let handed = model.accept()
@@ -87,6 +87,37 @@ final class IncomingCallModelTests: XCTestCase {
             calls.declinedInvites.isEmpty,
             "accepting is not declining — the flow runs the accept callable itself"
         )
+    }
+
+    /// Speed Talk is gone. A ring from a client that predates its removal is
+    /// not something this app can answer, so it is turned away for the caller
+    /// rather than shown as an "Incoming Voice Call" whose accept leads
+    /// nowhere.
+    func testAVoiceOnlyRingIsDeclinedRatherThanShown() async {
+        let calls = MockCallService()
+        let model = IncomingCallModel(calls: calls)
+        await settle(50)
+
+        let invite = calls.simulateIncomingInvite(caller: kenji, mode: .voice)
+        await settle()
+
+        XCTAssertNil(model.invite, "a retired-mode ring must never raise the banner")
+        XCTAssertEqual(
+            calls.declinedInvites, [invite],
+            "the caller is told, so their fan-out moves on instead of waiting"
+        )
+    }
+
+    func testAVideoRingStillRingsAfterTheVoiceModeWasRetired() async {
+        let calls = MockCallService()
+        let model = IncomingCallModel(calls: calls)
+        await settle(50)
+
+        let invite = calls.simulateIncomingInvite(caller: kenji, mode: .video)
+        await settle()
+
+        XCTAssertEqual(model.invite, invite)
+        XCTAssertTrue(calls.declinedInvites.isEmpty)
     }
 
     func testAcceptWithNoRingHandsNothingOut() async {

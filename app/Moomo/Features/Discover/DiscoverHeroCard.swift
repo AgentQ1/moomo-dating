@@ -2,12 +2,11 @@ import SwiftUI
 
 // MARK: - Hero
 
-/// The featured-candidate card: orbiting avatars, level pill, and the primary
-/// call to action.
+/// The featured-candidate card: orbiting avatars and the primary call to
+/// action.
 struct HeroCard: View {
     var featured: DiscoveryCandidate
     var nearby: [DiscoveryCandidate]
-    var level: Int
     var onTalk: () -> Void
 
     @State private var ringPhase: CGFloat = 0
@@ -29,36 +28,53 @@ struct HeroCard: View {
                         .offset(x: 74, y: -84)
                 }
             }
-            .frame(height: 260)
+            .frame(height: Size.heroStage)
             .padding(.top, Space.lg)
-            .overlay(alignment: .topLeading) {
-                LevelPill(level: level)
-                    .padding(.leading, Space.md)
-                    .padding(.top, Space.md)
-            }
 
-            Text(featured.wantsToTalk ? "\(featured.displayName) is waiting" : "Someone is waiting")
+            // Who this is, named, before the call request goes out. The card
+            // used to fall back to "Someone is waiting" whenever `wantsToTalk`
+            // was false, which left the one screen where the user decides to
+            // call showing an anonymous face — the gap App Review asked about
+            // on 2026-08-05. Identity is never optional here now, and this
+            // deliberately departs from the Discover reference, which shows
+            // the anonymous wording.
+            //
+            // Both lines are pinned to a fixed height rather than measured. A
+            // font that rounds differently, or an identity line that degrades
+            // to the longer fallback copy, must not be able to change how tall
+            // this card is — `HeroSkeleton` is built to the same arithmetic.
+            Text("\(featured.displayName), \(featured.age)")
                 .font(Typography.heroTitle)
                 .foregroundStyle(Palette.ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
                 .padding(.horizontal, Space.md)
+                .frame(height: Size.heroNameLine)
                 .padding(.top, Space.md)
 
-            Text("Start a video chat and make a real connection.")
+            Text(identityLine)
                 .font(Typography.body)
                 .foregroundStyle(Palette.textSecondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.horizontal, Space.md)
+                .frame(height: Size.heroIdentityLine)
                 .padding(.top, Space.xxs)
 
             PrimaryButton(
-                title: "Talk to \(featured.pronoun.objectForm)",
+                title: "Nearby",
                 icon: "video.fill",
+                fill: Palette.magenta,
                 action: onTalk
             )
             .padding(.horizontal, Space.xxl)
             .padding(.top, Space.md)
             .padding(.bottom, Space.lg)
+            .accessibilityLabel("Nearby. Start a video call with \(featured.displayName)")
+            .accessibilityIdentifier("discover.nearby")
         }
+        .frame(maxWidth: .infinity, minHeight: Size.heroCardHeight)
         .background(
             RoundedRectangle(cornerRadius: Radius.cardLarge, style: .continuous)
                 .fill(Palette.heroPeach)
@@ -71,6 +87,19 @@ struct HeroCard: View {
         .onAppear {
             withAnimation(Motion.ambient) { ringPhase = 1 }
         }
+    }
+
+    /// City and presence, under the name. Both are optional in the public
+    /// projection, so the line degrades to the action copy rather than
+    /// rendering an empty row.
+    private var identityLine: String {
+        let parts = [
+            featured.city.isEmpty ? nil : featured.city,
+            featured.isOnline ? "Online now" : nil
+        ].compactMap { $0 }
+        return parts.isEmpty
+            ? "Start a video chat and make a real connection."
+            : parts.joined(separator: " · ")
     }
 
     /// Places the orbiting avatars around the hero: three down the left, three
@@ -130,38 +159,30 @@ private struct OrbitAvatar: View {
 
 /// The concentric rings behind the hero avatar, breathing slowly.
 private struct OrbitRings: View {
+    /// 0…1, driven by the card's ambient loop.
+    ///
+    /// It scales the rings; it does not resize them. The distinction is the
+    /// whole point: the frames used to grow with the phase, so the card was
+    /// running a layout pass every frame from the moment it appeared and the
+    /// rings visibly changed shape a beat after first paint. A scale is a
+    /// render transform — the geometry is settled before the animation
+    /// starts and stays settled while it runs.
     var phase: CGFloat
+
+    /// Matches the old 6pt diameter swell at the outer ring.
+    private static let swell: CGFloat = 0.022
 
     var body: some View {
         ZStack {
             ForEach(0..<3, id: \.self) { index in
+                let diameter = 210 + CGFloat(index) * 34
                 Circle()
                     .stroke(.white.opacity(0.55 - Double(index) * 0.15), lineWidth: 1.5)
-                    .frame(
-                        width: 210 + CGFloat(index) * 34 + phase * 6,
-                        height: 210 + CGFloat(index) * 34 + phase * 6
-                    )
+                    .frame(width: diameter, height: diameter)
             }
         }
+        .scaleEffect(1 + phase * Self.swell)
         .accessibilityHidden(true)
-    }
-}
-
-private struct LevelPill: View {
-    var level: Int
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Text("🔥").font(.system(size: 13))
-            Text("Lv. \(level)")
-                .font(Typography.pill)
-                .foregroundStyle(Palette.coral)
-        }
-        .padding(.horizontal, Space.sm)
-        .padding(.vertical, 7)
-        .background(Capsule().fill(Palette.surface))
-        .shadow(Shadows.card)
-        .accessibilityLabel("Level \(level)")
     }
 }
 

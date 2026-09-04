@@ -35,7 +35,20 @@ final class CallCoordinator: ObservableObject {
 
     /// Starts matchmaking — or, if a call is already running, returns to it
     /// instead. Two concurrent calls is never a thing.
-    func start(mode: CallMode, with candidate: DiscoveryCandidate? = nil) {
+    ///
+    /// An unsupported mode is refused outright rather than quietly upgraded:
+    /// the only way a `.voice` start can reach here now is a caller that was
+    /// missed when Speed Talk was removed, and silently handing that caller a
+    /// video call would hide the bug instead of surfacing it.
+    func start(
+        mode: CallMode,
+        with candidate: DiscoveryCandidate? = nil,
+        experience: CallExperience = .videoMatch
+    ) {
+        guard mode.isSupported else {
+            assertionFailure("Refused a call in the retired \(mode.rawValue) mode.")
+            return
+        }
         if flow != nil {
             isPresenting = true
             return
@@ -43,6 +56,7 @@ final class CallCoordinator: ObservableObject {
         let flow = CallFlowModel(
             mode: mode,
             preferred: candidate,
+            experience: experience,
             calls: services.calls,
             matches: services.matches,
             safety: services.safety,
@@ -63,6 +77,10 @@ final class CallCoordinator: ObservableObject {
     /// thing.
     func acceptIncoming(_ invite: CallInvite) {
         guard flow == nil else { return }
+        // A ring in the retired voice-only mode is never answerable. The
+        // banner already refuses to show one (`IncomingCallModel`); this is
+        // the backstop for anything that reaches the coordinator directly.
+        guard invite.mode.isSupported else { return }
         let flow = CallFlowModel(
             mode: invite.mode,
             incoming: invite,

@@ -8,6 +8,21 @@ struct CallFailure: Equatable, Sendable {
     var isPermissionDenied = false
 }
 
+/// Which of Discover's two experiences this call is.
+///
+/// They are different products on top of one transport. Video Match is an
+/// ordinary three-minute video date, with the icebreakers arriving on their
+/// own; Go Play is the same call with a game picker the pair open together
+/// once they have seen each other. The distinction lives here, on the client:
+/// matchmaking pairs on `mode` alone, so both experiences draw from a single
+/// pool and a Go Play caller can be matched with a Video Match one. Splitting
+/// the pool would be a backend change, and a thin pool split in two matches
+/// nobody — see `docs/production-readiness/GO_PLAY_AND_ICEBREAKERS.md`.
+enum CallExperience: String, Equatable, Sendable, CaseIterable {
+    case videoMatch
+    case goPlay
+}
+
 /// One matchmaking-to-decision journey: permissions → search → connect →
 /// media → live call → like/pass → (maybe) match. Owns the countdown clock
 /// and every transition; the views under `CallFlowView` render its stage and
@@ -60,6 +75,10 @@ final class CallFlowModel: ObservableObject {
     @Published private(set) var actionFailure: String?
 
     let mode: CallMode
+    /// Which experience the user chose on Discover; the live screen reads it
+    /// to decide whether the icebreakers run themselves or a game picker is
+    /// offered instead.
+    let experience: CallExperience
     /// Exposed for the call screen, which renders provider video tracks.
     let media: CallMediaService
 
@@ -93,6 +112,7 @@ final class CallFlowModel: ObservableObject {
         mode: CallMode,
         preferred: DiscoveryCandidate? = nil,
         incoming: CallInvite? = nil,
+        experience: CallExperience = .videoMatch,
         calls: CallService,
         matches: MatchService,
         safety: SafetyService,
@@ -108,6 +128,7 @@ final class CallFlowModel: ObservableObject {
         self.mode = mode
         self.preferred = preferred
         self.incoming = incoming
+        self.experience = experience
         self.calls = calls
         self.matches = matches
         self.safety = safety
@@ -131,6 +152,22 @@ final class CallFlowModel: ObservableObject {
         if holdsIdleTimer { setIdleTimerDisabled(false) }
         // The room must not outlive the flow that joined it.
         Task { [media] in await media.leave() }
+    }
+
+    /// The live call's server session id, which both devices share. The
+    /// icebreakers derive their deck and their round ids from it, so two
+    /// phones land on the same three prompts without exchanging a word.
+    var sessionID: String? {
+        if case .active(let session) = stage { return session.id }
+        return nil
+    }
+
+    /// Seconds into the call. Derived from the same wall-clock countdown the
+    /// timer shows — which is recomputed from the server-set start rather
+    /// than decremented — so the icebreakers' schedule cannot drift between
+    /// the two devices, or across a suspension.
+    var elapsedSeconds: Int {
+        max(0, Int(callDuration.rounded()) - remainingSeconds)
     }
 
     var candidate: DiscoveryCandidate? {
@@ -319,6 +356,21 @@ final class CallFlowModel: ObservableObject {
                 guard let self else { return }
                 self.isCameraOn = previous
                 self.actionFailure = "Couldn't update the camera. Please try again."
+            }
+        }
+    }
+
+    /// Front camera to back and back again. Unlike mute and camera there is no
+    /// local flag to keep honest — which way the camera faces is a fact about
+    /// the capture device, and the media plane owns it — so this only has to
+    /// say so when the swap did not happen.
+    func flipCamera() {
+        Task { [weak self, media] in
+            do {
+                try await media.flipCamera()
+            } catch {
+                guard let self else { return }
+                self.actionFailure = "Couldn't switch cameras. Please try again."
             }
         }
     }

@@ -9,6 +9,13 @@
  * Foreground/in-app only — no push, no CallKit: a ring reaches exactly the
  * people whose app is open right now, and dies quietly for everyone else.
  *
+ * Who gets rung is proximity-ranked (proximity.ts). The pool is already
+ * narrowed to compatible, online, non-excluded people and the fan-out reaches
+ * only RING_FANOUT_LIMIT of them, so distance decides which of the eligible
+ * actually hear a banner — closest first, within the existing invitation and
+ * boost tiers. It is strictly an ordering: no one is excluded for distance,
+ * and anyone without a shared location keeps their place in the pool.
+ *
  * `callInvites/{calleeUid}` is ONE document per callee — the latest ring
  * overwrites a terminal older one, so a client listens to a single document
  * (the same idiom as its matchmakingQueue listener). Server-written only:
@@ -38,7 +45,7 @@ import {
   hasPassedEitherWay,
   participantSummary,
   ParticipantSummary,
-  CALL_MODES,
+  isSupportedCallMode,
   CallMode,
   QUEUE_ENTRY_TTL_MS,
   RING_TTL_MS,
@@ -49,6 +56,7 @@ import {
   millis,
 } from "./shared";
 import { PublicProfile, isMutuallyCompatible, isBoosted } from "./compatibility";
+import { loadCoarseLocations, sortByProximity } from "./proximity";
 import { ONLINE_WINDOW_MS, filterExcluded } from "./discovery";
 import { createCallSession, PairedSession, MATCHED_STALE_MS } from "./matchmaking";
 import { enforceRateLimit } from "./ratelimit";
@@ -182,9 +190,40 @@ export async function fanOutRingInvites(
         isMutuallyCompatible(caller, snapshot.data())
     );
 
+    // Proximity decides who actually gets rung. Everyone here is already
+    // online and already compatible, so distance is the one thing left that
+    // makes a ring worth answering — and RING_FANOUT_LIMIT is smaller than
+    // the eligible pool, so this ordering is what "we call the closest
+    // people first" means in practice.
+    //
+    // Sorted WITHIN the tiers above, never across them: the explicit "call
+    // this person" invitation stays first and a paid boost keeps its
+    // promise. Unlocated people score neutral and keep their pool position
+    // (stable sort), so nobody is dropped for not sharing a location.
+    const locations = await loadCoarseLocations(
+      [callerUid, ...eligible.map((snapshot) => snapshot.id)],
+      now
+    );
+    const callerLocation = locations.get(callerUid) ?? null;
+    const byTier = (tier: FirebaseFirestore.DocumentSnapshot[]) =>
+      sortByProximity(tier, callerLocation, (doc) => locations.get(doc.id) ?? null);
+    const rankedEligible = [
+      ...eligible.filter((doc) => doc.id === preferredPeerId),
+      ...byTier(
+        eligible.filter(
+          (doc) => doc.id !== preferredPeerId && isBoosted(doc.data(), now)
+        )
+      ),
+      ...byTier(
+        eligible.filter(
+          (doc) => doc.id !== preferredPeerId && !isBoosted(doc.data(), now)
+        )
+      ),
+    ];
+
     // 2. Blocks and pass tombstones, both directions — never ring a person
     //    the queue would refuse to pair (the same batch check Discover uses).
-    const { allowed } = await filterExcluded(callerUid, eligible);
+    const { allowed } = await filterExcluded(callerUid, rankedEligible);
 
     // 3. A banner burst, not a broadcast.
     const targets = allowed.slice(0, RING_FANOUT_LIMIT);
@@ -306,6 +345,7 @@ export async function fanOutRingInvites(
       mode,
       eligible: allowed.length,
       rung,
+      callerLocated: callerLocation !== null,
       ...(preferredPeerId ? { preferred: true } : {}),
     });
   } catch (error) {
@@ -342,7 +382,11 @@ export const acceptCallInvite = onCall(callable(20), async (request) => {
         !invite.exists ||
         invite.get("status") !== "ringing" ||
         (millis(invite.get("expiresAt")) ?? 0) <= now.toMillis() ||
-        !CALL_MODES.includes(mode) ||
+        // Voice-only rings are unanswerable now. An old one still ringing
+        // when the client updated reads as "no live ring" — the same honest
+        // dead end as an expired invite — rather than pairing a video
+        // client into a voice session.
+        !isSupportedCallMode(mode) ||
         typeof callerUid !== "string"
       ) {
         return { status: "unavailable", reason: "no-live-ring" };

@@ -36,14 +36,75 @@ final class MatchPreferencesTests: XCTestCase {
     }
 
     func testMutualCompatibilityRequiresBothDirections() {
-        let womanSeekingWomen: (Gender?, Set<InterestedIn>) = (.woman, [.women])
-        let manSeekingWomen: (Gender?, Set<InterestedIn>) = (.man, [.women])
-        let womanSeekingMen: (Gender?, Set<InterestedIn>) = (.woman, [.men])
+        let womanSeekingWomen: Person = (.woman, [.women], nil)
+        let manSeekingWomen: Person = (.man, [.women], nil)
+        let womanSeekingMen: Person = (.woman, [.men], nil)
 
         // He wants her; she does not want him.
         XCTAssertFalse(MatchPreferences.areMutuallyCompatible(womanSeekingWomen, manSeekingWomen))
         // Both directions hold.
         XCTAssertTrue(MatchPreferences.areMutuallyCompatible(manSeekingWomen, womanSeekingMen))
         XCTAssertTrue(MatchPreferences.areMutuallyCompatible(womanSeekingWomen, womanSeekingWomen))
+    }
+
+    // MARK: - Dating intention
+
+    private typealias Person = (
+        gender: Gender?, interestedIn: Set<InterestedIn>, intention: DatingIntention?
+    )
+
+    /// The point of the filter: opposite ends of the spectrum never meet.
+    func testLifePartnerAndShortTermNeverMatch() {
+        XCTAssertFalse(MatchPreferences.areIntentionsCompatible(.lifePartner, .shortTerm))
+        XCTAssertFalse(MatchPreferences.areIntentionsCompatible(.shortTerm, .lifePartner))
+        XCTAssertFalse(MatchPreferences.areIntentionsCompatible(.longTerm, .shortTerm))
+    }
+
+    /// The "open to" answers are the bridge between the two ends.
+    func testOpenToAnswersBridgeBothEnds() {
+        XCTAssertTrue(MatchPreferences.areIntentionsCompatible(.lifePartner, .longTermOpenToShort))
+        XCTAssertTrue(MatchPreferences.areIntentionsCompatible(.shortTerm, .longTermOpenToShort))
+        XCTAssertTrue(MatchPreferences.areIntentionsCompatible(.lifePartner, .shortTermOpenToLong))
+        XCTAssertTrue(MatchPreferences.areIntentionsCompatible(.shortTerm, .shortTermOpenToLong))
+    }
+
+    func testSameEndOfTheSpectrumMatches() {
+        XCTAssertTrue(MatchPreferences.areIntentionsCompatible(.lifePartner, .longTerm))
+        XCTAssertTrue(MatchPreferences.areIntentionsCompatible(.shortTerm, .shortTerm))
+    }
+
+    /// Undecided and pre-intention accounts must never be soft-locked out of
+    /// matching — the same rule empty gender preferences follow.
+    func testFiguringItOutAndMissingIntentionMatchEveryone() {
+        for intention in DatingIntention.allCases {
+            XCTAssertTrue(
+                MatchPreferences.areIntentionsCompatible(.figuringItOut, intention),
+                "\(intention) must be reachable by someone still figuring it out"
+            )
+            XCTAssertTrue(
+                MatchPreferences.areIntentionsCompatible(nil, intention),
+                "\(intention) must be reachable by an account with no intention set"
+            )
+        }
+        XCTAssertTrue(MatchPreferences.areIntentionsCompatible(nil, nil))
+    }
+
+    /// Intention is an AND with gender, not a replacement for it.
+    func testIntentionGatesOtherwiseCompatiblePeople() {
+        let manSeekingWomenLongTerm: Person = (.man, [.women], .lifePartner)
+        let womanSeekingMenShortTerm: Person = (.woman, [.men], .shortTerm)
+        let womanSeekingMenLongTerm: Person = (.woman, [.men], .longTerm)
+
+        XCTAssertFalse(
+            MatchPreferences.areMutuallyCompatible(
+                manSeekingWomenLongTerm, womanSeekingMenShortTerm
+            ),
+            "Gender preferences line up, but the intentions cannot both be satisfied"
+        )
+        XCTAssertTrue(
+            MatchPreferences.areMutuallyCompatible(
+                manSeekingWomenLongTerm, womanSeekingMenLongTerm
+            )
+        )
     }
 }

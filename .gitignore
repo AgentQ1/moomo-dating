@@ -34,3 +34,6 @@ backend/functions/lib/
 backend/rules-tests/*.log
 backend/functions/*.log
 .claude/settings.local.json
+
+# Demo-video captures (large binaries, regenerated per take)
+artifacts/

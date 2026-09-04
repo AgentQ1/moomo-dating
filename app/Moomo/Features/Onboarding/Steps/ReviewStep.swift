@@ -62,6 +62,10 @@ struct ReviewStep: View {
                         value: profile.interestedIn.map(\.label).sorted().joined(separator: ", ")
                     )
                 }
+                if let intention = profile.datingIntention {
+                    Divider().background(Palette.separator)
+                    ReviewRow(label: "Looking for", value: intention.label)
+                }
                 if let location = profile.location {
                     Divider().background(Palette.separator)
                     ReviewRow(label: "Location", value: location.shortDisplay)

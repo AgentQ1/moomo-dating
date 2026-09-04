@@ -8,7 +8,7 @@ in the demo phone number._
 ## Review notes (paste into ASC)
 
 > Baybe is an 18+ dating app built around short (3-minute, server-capped)
-> video and voice calls between mutually compatible, phone-verified users.
+> video calls between mutually compatible, phone-verified users.
 > (Store name: Baybe, ASC app 6793496424; bundle ID com.moomo.dating and the
 > internal project name "Moomo" are historical and not user-visible.)
 > It is not anonymous or random video chat:
@@ -31,6 +31,14 @@ in the demo phone number._
 >   never recorded.
 > - Chat opens only after both users independently choose "like" after a
 >   call; a "pass" is never revealed to the other person.
+> - Location is APPROXIMATE and is used only to order who you see. If a user
+>   allows location access, their position is rounded on the device to a grid
+>   of about one kilometre and stored in a private, owner-only document; the
+>   server uses it to rank people who are closer to the user higher among the
+>   people they are already compatible with. It is never shown to other users,
+>   no exact coordinate is ever stored, no distance is displayed anywhere in
+>   the app, and declining location access limits nothing — those users simply
+>   see the same people ordered by recent activity.
 > - Community-guideline acceptance (no harassment, hate, or nudity —
 >   violations end in removal) is a mandatory onboarding step.
 >
@@ -63,7 +71,8 @@ in the demo phone number._
 | Report + block everywhere | In-call `ActiveCallView.swift:99-103`; post-call `CallDecisionViews.swift:64-84`; chat `ChatDetailView.swift:212-223`; matches `MatchesView.swift:163-188`; blocked-list management `SafetySettingsView.swift:64-124` |
 | Private decisions | `backend/functions/src/decisions.ts:8-9,170-205`; rules close decisions to both participants `firestore.rules:307-313` |
 | Community guidelines gate | `PermissionAndSafetySteps.swift:96-135`; enforced `OnboardingModel.swift:354-355` |
-| Account deletion (5.1.1(v)) | In-app: `ProfileView.swift:180-187` + confirmation `:53-64`; server deletes everything incl. Auth user `backend/functions/src/account.ts:25-80` |
+| Account deletion (5.1.1(v)) | In-app: `ProfileView.swift:180-187` + confirmation `:53-64`; server deletes everything incl. Auth user `backend/functions/src/account.ts:25-80` (the `recursiveDelete` on `users/{uid}` takes the private location with it) |
+| Proximity is real, approximate, and a ranking boost only | Algorithm + constants `backend/functions/src/proximity.ts`; applied in `discovery.ts`, `matchmaking.ts`, `ring.ts`; client rounding `app/Moomo/Services/CoarseLocationReporter.swift`; owner-only storage `backend/firestore.rules` (`users/{uid}/private/location`). Tests: `backend/functions/test/proximity.test.mjs`, the "proximity ranking" suites in `discovery.integration.test.mjs` / `matchmaking.integration.test.mjs`, `backend/rules-tests/firestore.rules.test.mjs`, `app/MoomoTests/CoarseLocationTests.swift` |
 
 ## Do NOT claim in review notes or store copy
 
@@ -86,3 +95,6 @@ in the demo phone number._
    PrivacyInfo.xcprivacy (phone, name, photos, sensitive info, other user
    content, user ID, coarse location, other data types (DOB); linked, no
    tracking, NO email), privacy policy URL (must be live), support URL.
+   **Coarse Location must be DECLARED** — the app now collects it (see
+   PROXIMITY_2026-08-11.md §5 for the exact label settings). An
+   under-declared location label is its own rejection under 5.1.1.

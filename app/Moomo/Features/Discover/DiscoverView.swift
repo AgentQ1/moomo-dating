@@ -4,23 +4,19 @@ import SwiftUI
 struct DiscoverView: View {
     @EnvironmentObject private var session: SessionStore
     @ObservedObject var model: DiscoverModel
-    @ObservedObject var notifications: NotificationsModel
-    @ObservedObject var boost: BoostModel
     @ObservedObject var coordinator: CallCoordinator
 
-    @State private var isShowingNotifications = false
-    @State private var isShowingBoost = false
+    @State private var isShowingLocationPicker = false
+    @State private var isShowingIntentionPicker = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                DiscoverHeader(
-                    name: session.user?.profile.displayName ?? "",
-                    community: model.state?.community,
-                    hasUnread: notifications.hasUnread,
-                    isBoosted: boost.state.isActive(),
-                    onBell: { isShowingNotifications = true },
-                    onBoost: { isShowingBoost = true }
+                DiscoverLocationBar(
+                    title: locationTitle,
+                    intention: session.user?.profile.datingIntention,
+                    onOpenLocation: { isShowingLocationPicker = true },
+                    onOpenIntention: { isShowingIntentionPicker = true }
                 )
                 .padding(.horizontal, Space.gutter)
                 .padding(.top, Space.xs)
@@ -53,12 +49,34 @@ struct DiscoverView: View {
         .background(Palette.canvas)
         .refreshable { await model.load() }
         .task { await model.load() }
-        .sheet(isPresented: $isShowingNotifications) {
-            NotificationsView(model: notifications)
+        .sheet(isPresented: $isShowingLocationPicker) {
+            LocationPickerView(current: session.user?.profile.location) { city in
+                Task { await save { $0.location = city } }
+            }
         }
-        .sheet(isPresented: $isShowingBoost) {
-            BoostView(model: boost)
+        .sheet(isPresented: $isShowingIntentionPicker) {
+            DatingIntentionPickerView(current: session.user?.profile.datingIntention) { intention in
+                Task { await save { $0.datingIntention = intention } }
+            }
         }
+    }
+
+    /// "Chicago, IL", or a prompt when the profile carries no city. Every
+    /// account that finished onboarding has one — this covers the gap while a
+    /// restored session's profile is still loading.
+    private var locationTitle: String {
+        session.user?.profile.location?.compactDisplay ?? "Set your city"
+    }
+
+    /// Writes a bar edit through the one profile write path, so it lands in
+    /// Firestore and in the public projection like any other edit. A no-op
+    /// edit is dropped rather than costing a round trip.
+    private func save(_ edit: (inout Profile) -> Void) async {
+        guard let original = session.user?.profile else { return }
+        var profile = original
+        edit(&profile)
+        guard profile != original else { return }
+        await session.updateProfile(profile)
     }
 
     @ViewBuilder
@@ -66,6 +84,12 @@ struct DiscoverView: View {
         switch model.phase {
         case .loading:
             HeroSkeleton()
+                .padding(.horizontal, Space.gutter)
+
+        // An empty pool is not a failure, and it is the one error case whose
+        // answer is a call rather than a retry.
+        case .failed(.noUsersAvailable):
+            nobodyAroundCard
                 .padding(.horizontal, Space.gutter)
 
         case .failed(let error):
@@ -81,47 +105,70 @@ struct DiscoverView: View {
 
         case .loaded(let state):
             if let featured = state.featured {
-                HeroCard(featured: featured, nearby: state.nearby, level: state.level) {
+                HeroCard(featured: featured, nearby: state.nearby) {
                     coordinator.start(mode: .video, with: featured)
                 }
                 .padding(.horizontal, Space.gutter)
             } else {
-                DiscoverMessageCard(
-                    icon: "person.2.slash",
-                    title: "No one's around",
-                    message: "Nobody's waiting right now. Try a chat mode below, or check back in a bit.",
-                    actionTitle: "Refresh"
-                ) {
-                    Task { await model.load() }
-                }
-                .padding(.horizontal, Space.gutter)
+                nobodyAroundCard
+                    .padding(.horizontal, Space.gutter)
             }
         }
     }
 
+    /// Nobody to put in the hero — but Discover must never be a screen with
+    /// no way into a call. Nearby is that way in both states: over a hero it
+    /// rings the person it just named, and here it joins the queue and waits
+    /// for whoever turns up next. Same button, same identifier, one promise.
+    ///
+    /// Refreshing is what the card used to offer instead, and it is not lost:
+    /// pulling down the screen still reloads the feed. Getting in the queue
+    /// is the better answer to an empty room, so it is the one on the card.
+    private var nobodyAroundCard: some View {
+        DiscoverMessageCard(
+            icon: "person.2.slash",
+            title: "No one's around",
+            message: "Nobody's waiting right now. Tap Nearby and we'll pair you with the first person who's free.",
+            actionTitle: "Nearby",
+            actionIdentifier: "discover.nearby"
+        ) {
+            coordinator.start(mode: .video)
+        }
+    }
+
+    /// The two chat modes. Both are video calls on the one matchmaking pool —
+    /// the experience decides what the live screen offers, never the
+    /// transport and never a separate queue. Neither is an audio-only start:
+    /// `.voice` is decode-only and has no button anywhere.
     private var chatModes: some View {
         HStack(spacing: Space.tileGap) {
             ChatModeTile(
                 title: "Video Match",
                 subtitle: "Instant video conversations",
                 icon: "video.fill",
-                iconColor: Color(hex: 0xEC4899),
+                iconColor: Palette.mascotPinkInk,
                 gradient: Palette.videoPink,
-                mascotColor: Color(hex: 0xF9A8D4)
+                mascotColor: Palette.mascotPink
             ) {
-                coordinator.start(mode: .video)
+                coordinator.start(mode: .video, experience: .videoMatch)
             }
+            .accessibilityIdentifier("discover.videoMatch")
 
             ChatModeTile(
-                title: "Real Talk",
-                subtitle: "Voice chats with real people",
-                icon: "mic.fill",
-                iconColor: Color(hex: 0x7C3AED),
-                gradient: Palette.voicePurple,
-                mascotColor: Color(hex: 0xC4B5FD)
+                title: "Go Play",
+                subtitle: "Match, talk, then pick a game.",
+                icon: "gamecontroller.fill",
+                iconColor: Palette.mascotSageInk,
+                gradient: Palette.goPlaySage,
+                mascotColor: Palette.mascotSage
             ) {
-                coordinator.start(mode: .voice)
+                // Go Play is a video call you choose a game inside — never an
+                // audio-only call, and never a different queue. The experience
+                // decides what the live screen offers; the transport is the
+                // ordinary video flow.
+                coordinator.start(mode: .video, experience: .goPlay)
             }
+            .accessibilityIdentifier("discover.goPlay")
         }
     }
 
@@ -162,106 +209,6 @@ struct DiscoverView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Return to your call in progress")
         .accessibilityIdentifier("discover.returnToCall")
-    }
-}
-
-// MARK: - Header
-
-private struct DiscoverHeader: View {
-    var name: String
-    var community: String?
-    var hasUnread: Bool
-    var isBoosted: Bool
-    var onBell: () -> Void
-    var onBoost: () -> Void
-
-    var body: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: Space.xxs) {
-                Text("Hey there 👋")
-                    .font(Typography.screenTitle)
-                    .foregroundStyle(Palette.ink)
-
-                if let community {
-                    // Informational, not a button: the community switcher
-                    // arrives with the communities feature, and a chevron that
-                    // goes nowhere is a broken promise.
-                    HStack(spacing: Space.xxs) {
-                        Image(systemName: "graduationcap.fill")
-                            .font(.system(size: 13))
-                            .foregroundStyle(Palette.blue)
-                        Text(community)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(Palette.ink)
-                            // The reference keeps this on one line; long
-                            // community names shrink rather than wrap,
-                            // which would push the hero card down.
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("Community: \(community)")
-                }
-            }
-
-            Spacer(minLength: Space.xs)
-
-            HStack(spacing: Space.xs) {
-                TopActionButton(icon: "bell", showsDot: hasUnread, action: onBell)
-                    .accessibilityLabel(hasUnread ? "Notifications, unread" : "Notifications")
-                    .accessibilityIdentifier("discover.bell")
-
-                Button(action: onBoost) {
-                    HStack(spacing: 5) {
-                        Image(systemName: isBoosted ? "bolt.circle.fill" : "bolt.circle")
-                            .font(.system(size: 19, weight: .medium))
-                            .foregroundStyle(isBoosted ? Palette.gold : Palette.ink)
-                        Text("Boost")
-                            .font(.system(size: 15, weight: .medium))
-                    }
-                    .foregroundStyle(Palette.ink)
-                    .padding(.horizontal, Space.sm)
-                    .frame(height: Size.topActionButton)
-                    .background(
-                        RoundedRectangle(cornerRadius: Radius.well, style: .continuous)
-                            .fill(Palette.surface)
-                    )
-                    .shadow(Shadows.card)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(isBoosted ? "Boost, active" : "Boost")
-                .accessibilityIdentifier("discover.boost")
-            }
-        }
-    }
-}
-
-private struct TopActionButton: View {
-    var icon: String
-    var showsDot: Bool
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            ZStack {
-                RoundedRectangle(cornerRadius: Radius.well, style: .continuous)
-                    .fill(Palette.surface)
-                    .frame(width: Size.topActionButton, height: Size.topActionButton)
-                    .shadow(Shadows.card)
-
-                Image(systemName: icon)
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(Palette.ink)
-
-                if showsDot {
-                    Circle()
-                        .fill(Palette.notificationDot)
-                        .frame(width: 9, height: 9)
-                        .offset(x: 11, y: -11)
-                }
-            }
-        }
-        .buttonStyle(.plain)
     }
 }
 

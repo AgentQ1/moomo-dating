@@ -6,6 +6,11 @@ import UIKit
 struct CallFlowView: View {
     @ObservedObject var model: CallFlowModel
     @ObservedObject var coordinator: CallCoordinator
+    /// The signed-in user, as the in-call experiences see them. Passed down
+    /// from the tab shell rather than read from the environment: this screen
+    /// lives in a full-screen cover, and a missing environment object there
+    /// would be a crash rather than a missing name.
+    var localPlayer: CallGameSeat = CallGameSeat(id: "", displayName: "You")
 
     var body: some View {
         ZStack {
@@ -19,7 +24,11 @@ struct CallFlowView: View {
                 CallConnectingView(candidate: candidate, mode: model.mode)
 
             case .active:
-                ActiveCallView(model: model, onMinimise: { coordinator.minimise() })
+                ActiveCallView(
+                    model: model,
+                    onMinimise: { coordinator.minimise() },
+                    localPlayer: localPlayer
+                )
 
             case .deciding(let summary):
                 CallDecisionView(model: model, summary: summary)
@@ -44,15 +53,17 @@ struct CallFlowView: View {
         .animation(Motion.transition, value: model.stage)
     }
 
-    /// Search and connect run on the reference's dark navy; the live call is
-    /// daylight cream per its reference; decision phases the cool canvas.
+    /// Search, connect, and the live call all run on the dark navy; decision
+    /// phases get the cool canvas.
     private var background: some View {
         Group {
             switch model.stage {
             case .searching, .connecting:
                 Palette.night
             case .active:
-                Palette.cream
+                // Full-bleed video wants a dark ground behind it, not the
+                // cream page the old card sat on.
+                Palette.night
             case .deciding, .likeSent, .matched, .failed:
                 Palette.canvas
             }

@@ -24,9 +24,13 @@ struct DiscoveryCandidate: Identifiable, Equatable, Sendable {
     var pronoun: CandidatePronoun
 }
 
-/// Used only to render "Talk to Them" / "Talk to Him" / "Talk to Her" — the
-/// reference shows "Talk to Him". Defaults to `they`, which is always safe when
-/// a user hasn't told us.
+/// A candidate's pronoun, for copy that has to refer to them in the third
+/// person. Defaults to `they`, which is always safe when a user hasn't told us.
+///
+/// `objectForm` rendered the hero CTA ("Talk to Him") until the Discover
+/// redesign replaced it with "Nearby"; nothing calls it right now. Kept because
+/// the mapping is the app's one answer to this question, and the next screen
+/// that names someone should not invent a second one.
 enum CandidatePronoun: String, Sendable {
     case they
     case he
