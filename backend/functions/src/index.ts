@@ -30,3 +30,4 @@ export { sendSystemNotification } from "./notifications";
 export { onMessageCreated } from "./chat";
 export { deleteAccount } from "./account";
 export { resolveReport } from "./moderation";
+export { syncBaybeKpisToNotion } from "./notionKpiSync";
